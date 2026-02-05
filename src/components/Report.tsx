@@ -7,150 +7,174 @@ interface ReportProps {
   onReset: () => void;
 }
 
-const gradeColors: Record<Grade, string> = {
-  A: "var(--color-grade-a)",
-  B: "var(--color-grade-b)",
-  C: "var(--color-grade-c)",
-  D: "var(--color-grade-d)",
-  F: "var(--color-grade-f)",
-};
+function gradeColor(grade: Grade) {
+  const map: Record<Grade, string> = {
+    A: "var(--color-grade-a)",
+    B: "var(--color-grade-b)",
+    C: "var(--color-grade-c)",
+    D: "var(--color-grade-d)",
+    F: "var(--color-grade-f)",
+  };
+  return map[grade];
+}
 
-const gradeBgColors: Record<Grade, string> = {
-  A: "var(--color-grade-a-bg)",
-  B: "var(--color-grade-b-bg)",
-  C: "var(--color-grade-c-bg)",
-  D: "var(--color-grade-d-bg)",
-  F: "var(--color-grade-f-bg)",
-};
+function gradeDim(grade: Grade) {
+  const map: Record<Grade, string> = {
+    A: "var(--color-grade-a-dim)",
+    B: "var(--color-grade-b-dim)",
+    C: "var(--color-grade-c-dim)",
+    D: "var(--color-grade-d-dim)",
+    F: "var(--color-grade-f-dim)",
+  };
+  return map[grade];
+}
+
+function gradeVerdict(grade: Grade): string {
+  const map: Record<Grade, string> = {
+    A: "Ship it.",
+    B: "Almost there.",
+    C: "Needs work.",
+    D: "Not ready.",
+    F: "Do not ship.",
+  };
+  return map[grade];
+}
 
 export function Report({ result, onReset }: ReportProps) {
+  const domain = result.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+
   return (
     <div className={styles.report}>
+      {/* Header */}
       <header className={styles.header}>
-        <button className={styles.backButton} onClick={onReset}>
-          ← Scan another
+        <button className={styles.back} onClick={onReset}>
+          ← new scan
         </button>
-        <div className={styles.url}>
-          <span className={styles.urlLabel}>Scanned</span>
-          <a
-            href={result.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.urlLink}
-          >
-            {result.url.replace(/^https?:\/\//, "")}
-          </a>
-        </div>
+        <span className={styles.meta}>
+          {(result.scanTimeMs / 1000).toFixed(1)}s
+        </span>
       </header>
 
-      <div className={styles.scoreSection}>
-        <div
-          className={styles.scoreCircle}
-          style={
-            {
-              "--grade-color": gradeColors[result.overallGrade],
-              "--grade-bg": gradeBgColors[result.overallGrade],
-            } as React.CSSProperties
-          }
-        >
-          <div className={styles.scoreRing}>
-            <svg viewBox="0 0 120 120" className={styles.scoreSvg}>
-              <circle
-                cx="60"
-                cy="60"
-                r="54"
-                fill="none"
-                stroke="var(--color-border)"
-                strokeWidth="6"
-              />
-              <circle
-                cx="60"
-                cy="60"
-                r="54"
-                fill="none"
-                stroke="var(--grade-color)"
-                strokeWidth="6"
-                strokeLinecap="round"
-                strokeDasharray={`${(result.overallScore / 100) * 339.3} 339.3`}
-                transform="rotate(-90 60 60)"
-                className={styles.scoreArc}
-              />
-            </svg>
-            <div className={styles.scoreInner}>
-              <span className={styles.scoreNumber}>{result.overallScore}</span>
-              <span className={styles.scoreGrade}>{result.overallGrade}</span>
+      {/* Score hero */}
+      <section className={styles.scoreHero}>
+        <div className={styles.domain}>
+          <code>{domain}</code>
+        </div>
+
+        <div className={styles.scoreRow}>
+          <div
+            className={styles.grade}
+            style={{ color: gradeColor(result.overallGrade) }}
+          >
+            {result.overallGrade}
+          </div>
+          <div className={styles.scoreInfo}>
+            <div className={styles.scoreNumber}>
+              <span style={{ color: gradeColor(result.overallGrade) }}>
+                {result.overallScore}
+              </span>
+              <span className={styles.scoreOf}>/100</span>
             </div>
+            <p
+              className={styles.verdict}
+              style={{ color: gradeColor(result.overallGrade) }}
+            >
+              {gradeVerdict(result.overallGrade)}
+            </p>
           </div>
         </div>
 
-        <div className={styles.scoreMeta}>
-          <p className={styles.scoreLabel}>Overall ship score</p>
-          <p className={styles.scoreTime}>
-            Scanned in {(result.scanTimeMs / 1000).toFixed(1)}s
-          </p>
+        {/* Score bar */}
+        <div className={styles.scoreBar}>
+          <div
+            className={styles.scoreBarFill}
+            style={{
+              width: `${result.overallScore}%`,
+              background: gradeColor(result.overallGrade),
+            }}
+          />
         </div>
-      </div>
 
-      <div className={styles.categories}>
-        {result.categories.map((category) => (
-          <CategoryCard key={category.id} category={category} />
+        {/* Category summary strip */}
+        <div className={styles.summaryStrip}>
+          {result.categories.map((cat) => (
+            <div key={cat.id} className={styles.summaryItem}>
+              <span className={styles.summaryGrade} style={{ color: gradeColor(cat.grade) }}>
+                {cat.grade}
+              </span>
+              <span className={styles.summaryLabel}>{cat.name}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Categories */}
+      <section className={styles.categories}>
+        {result.categories.map((category, i) => (
+          <CategorySection
+            key={category.id}
+            category={category}
+            index={i}
+          />
         ))}
-      </div>
+      </section>
 
       <footer className={styles.footer}>
         <p>
-          Ship Score is a quick external scan. It catches common issues but
-          can't replace a thorough security audit or accessibility review.
+          External scan only — can't replace a thorough security audit. Use as a starting checklist, not a seal of approval.
         </p>
       </footer>
     </div>
   );
 }
 
-function CategoryCard({ category }: { category: Category }) {
-  const [expanded, setExpanded] = useState(category.grade !== "A");
-
-  const passedCount = category.checks.filter((c) => c.passed).length;
-  const totalCount = category.checks.length;
+function CategorySection({
+  category,
+  index,
+}: {
+  category: Category;
+  index: number;
+}) {
+  const [open, setOpen] = useState(category.grade !== "A");
+  const failed = category.checks.filter((c) => !c.passed);
+  const passed = category.checks.filter((c) => c.passed);
 
   return (
     <div
       className={styles.category}
       style={
         {
-          "--cat-color": gradeColors[category.grade],
-          "--cat-bg": gradeBgColors[category.grade],
+          animationDelay: `${index * 60}ms`,
+          "--cat-color": gradeColor(category.grade),
+          "--cat-dim": gradeDim(category.grade),
         } as React.CSSProperties
       }
     >
-      <button
-        className={styles.categoryHeader}
-        onClick={() => setExpanded(!expanded)}
-      >
+      <button className={styles.categoryHeader} onClick={() => setOpen(!open)}>
         <div className={styles.categoryLeft}>
           <span className={styles.categoryEmoji}>{category.emoji}</span>
-          <div>
-            <span className={styles.categoryName}>{category.name}</span>
-            <span className={styles.categoryCount}>
-              {passedCount}/{totalCount} passed
-            </span>
-          </div>
+          <span className={styles.categoryName}>{category.name}</span>
+          <span className={styles.categoryRatio}>
+            {passed.length}/{category.checks.length}
+          </span>
         </div>
         <div className={styles.categoryRight}>
           <span className={styles.categoryGrade}>{category.grade}</span>
-          <span className={styles.categoryScore}>{category.score}</span>
-          <span
-            className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}
-          >
-            ▾
+          <span className={`${styles.arrow} ${open ? styles.arrowOpen : ""}`}>
+            ›
           </span>
         </div>
       </button>
 
-      {expanded && (
-        <div className={styles.checks}>
-          {category.checks.map((check) => (
-            <CheckRow key={check.id} check={check} />
+      {open && (
+        <div className={styles.checkList}>
+          {/* Failed first */}
+          {failed.map((check) => (
+            <CheckItem key={check.id} check={check} />
+          ))}
+          {/* Then passed, dimmed */}
+          {passed.map((check) => (
+            <CheckItem key={check.id} check={check} />
           ))}
         </div>
       )}
@@ -158,37 +182,30 @@ function CategoryCard({ category }: { category: Category }) {
   );
 }
 
-function CheckRow({ check }: { check: Check }) {
-  const [showDetail, setShowDetail] = useState(false);
-
-  const severityLabel = {
-    critical: "Critical",
-    warning: "Warning",
-    info: "Info",
-  };
+function CheckItem({ check }: { check: Check }) {
+  const [expanded, setExpanded] = useState(false);
 
   return (
     <div
-      className={`${styles.check} ${check.passed ? styles.checkPassed : styles.checkFailed}`}
-      onClick={() => setShowDetail(!showDetail)}
+      className={`${styles.check} ${check.passed ? styles.checkPass : styles.checkFail}`}
+      onClick={() => setExpanded(!expanded)}
     >
-      <div className={styles.checkHeader}>
-        <span className={styles.checkIcon}>{check.passed ? "✓" : "✗"}</span>
+      <div className={styles.checkRow}>
+        <span className={styles.checkStatus}>
+          {check.passed ? "✓" : "✗"}
+        </span>
         <span className={styles.checkName}>{check.name}</span>
         {!check.passed && (
-          <span
-            className={`${styles.severityBadge} ${styles[`severity-${check.severity}`]}`}
-          >
-            {severityLabel[check.severity]}
+          <span className={`${styles.severity} ${styles[check.severity]}`}>
+            {check.severity}
           </span>
         )}
       </div>
-      {showDetail && check.detail && (
-        <p className={styles.checkDetail}>{check.detail}</p>
-      )}
-      {!showDetail && !check.passed && (
-        <p className={styles.checkDesc}>{check.description}</p>
-      )}
+      {expanded && check.detail ? (
+        <p className={styles.detail}>{check.detail}</p>
+      ) : !check.passed && !expanded ? (
+        <p className={styles.desc}>{check.description}</p>
+      ) : null}
     </div>
   );
 }
