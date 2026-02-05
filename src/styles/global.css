@@ -1,0 +1,110 @@
+/* --- Design tokens --- */
+:root {
+  --color-bg: #0a0a0b;
+  --color-surface: #141416;
+  --color-surface-raised: #1c1c20;
+  --color-surface-hover: #232328;
+  --color-border: #2a2a30;
+  --color-border-subtle: #1e1e24;
+  --color-text: #ececf0;
+  --color-text-secondary: #8b8b96;
+  --color-text-muted: #5c5c66;
+
+  /* Grades */
+  --color-grade-a: #22c55e;
+  --color-grade-a-bg: #22c55e15;
+  --color-grade-b: #84cc16;
+  --color-grade-b-bg: #84cc1615;
+  --color-grade-c: #eab308;
+  --color-grade-c-bg: #eab30815;
+  --color-grade-d: #f97316;
+  --color-grade-d-bg: #f9731615;
+  --color-grade-f: #ef4444;
+  --color-grade-f-bg: #ef444415;
+
+  /* Accent */
+  --color-accent: #818cf8;
+  --color-accent-hover: #6366f1;
+  --color-accent-bg: #818cf815;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+
+  /* Type */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* --- Reset --- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  min-height: 100vh;
+}
+
+/* --- Animations --- */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes score-count {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
