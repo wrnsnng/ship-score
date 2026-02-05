@@ -48,6 +48,7 @@ export async function scan(url: string): Promise<ScanResult> {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (compatible; ShipScore/1.0; +https://shipscore.dev)",
+        "Accept-Encoding": "gzip, deflate, br",
       },
     });
   } finally {
