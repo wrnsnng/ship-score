@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "concurrently \"bun run dev:api\" \"bun run dev:web\"",
     "dev:web": "vite",
-    "dev:api": "bun --watch api/server.ts",
+    "dev:api": "bun --watch scripts/dev-server.ts",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@hono/node-server": "^1.19.9",
     "cheerio": "^1.0.0",
     "hono": "^4.7.0",
     "react": "^19.0.0",

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { scan } from "./scanner";
+import { scan } from "../lib/scanner";
 
 const app = new Hono();
 
@@ -13,7 +13,6 @@ app.post("/api/scan", async (c) => {
     return c.json({ error: "URL is required" }, 400);
   }
 
-  // Normalize URL
   let normalizedUrl = url.trim();
   if (!normalizedUrl.startsWith("http")) {
     normalizedUrl = `https://${normalizedUrl}`;
