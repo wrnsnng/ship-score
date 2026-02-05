@@ -1,6 +1,27 @@
 import { useState } from "react";
-import type { ScanResult, Category, Check, Grade } from "../types";
+import {
+  Shield,
+  Zap,
+  Search,
+  Accessibility,
+  ShieldAlert,
+  Star,
+  Check,
+  X,
+  ArrowLeft,
+  ChevronRight,
+} from "lucide-react";
+import type { ScanResult, Category, Check as CheckType, Grade } from "../types";
 import styles from "./Report.module.css";
+
+const CATEGORY_ICONS: Record<string, React.ElementType> = {
+  security: Shield,
+  performance: Zap,
+  seo: Search,
+  accessibility: Accessibility,
+  "error-handling": ShieldAlert,
+  "best-practices": Star,
+};
 
 interface ReportProps {
   result: ScanResult;
@@ -48,7 +69,7 @@ export function Report({ result, onReset }: ReportProps) {
       {/* Header */}
       <header className={styles.header}>
         <button className={styles.back} onClick={onReset}>
-          ← new scan
+          <ArrowLeft size={14} strokeWidth={2} /> new scan
         </button>
         <span className={styles.meta}>
           {(result.scanTimeMs / 1000).toFixed(1)}s
@@ -138,6 +159,7 @@ function CategorySection({
   const [open, setOpen] = useState(category.grade !== "A");
   const failed = category.checks.filter((c) => !c.passed);
   const passed = category.checks.filter((c) => c.passed);
+  const Icon = CATEGORY_ICONS[category.id];
 
   return (
     <div
@@ -152,7 +174,9 @@ function CategorySection({
     >
       <button className={styles.categoryHeader} onClick={() => setOpen(!open)}>
         <div className={styles.categoryLeft}>
-          <span className={styles.categoryEmoji}>{category.emoji}</span>
+          <span className={styles.categoryIcon}>
+            {Icon && <Icon size={18} strokeWidth={2} />}
+          </span>
           <span className={styles.categoryName}>{category.name}</span>
           <span className={styles.categoryRatio}>
             {passed.length}/{category.checks.length}
@@ -161,7 +185,7 @@ function CategorySection({
         <div className={styles.categoryRight}>
           <span className={styles.categoryGrade}>{category.grade}</span>
           <span className={`${styles.arrow} ${open ? styles.arrowOpen : ""}`}>
-            ›
+            <ChevronRight size={16} strokeWidth={2} />
           </span>
         </div>
       </button>
@@ -182,7 +206,7 @@ function CategorySection({
   );
 }
 
-function CheckItem({ check }: { check: Check }) {
+function CheckItem({ check }: { check: CheckType }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -192,7 +216,7 @@ function CheckItem({ check }: { check: Check }) {
     >
       <div className={styles.checkRow}>
         <span className={styles.checkStatus}>
-          {check.passed ? "✓" : "✗"}
+          {check.passed ? <Check size={14} strokeWidth={2.5} /> : <X size={14} strokeWidth={2.5} />}
         </span>
         <span className={styles.checkName}>{check.name}</span>
         {!check.passed && (

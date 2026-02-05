@@ -1,4 +1,12 @@
 import { useState, type FormEvent } from "react";
+import {
+  Shield,
+  Zap,
+  Search,
+  Accessibility,
+  ShieldAlert,
+  Star,
+} from "lucide-react";
 import styles from "./Hero.module.css";
 
 interface HeroProps {
@@ -67,17 +75,17 @@ export function Hero({ onScan, loading, error }: HeroProps) {
         {error && <p className={styles.error}>{error}</p>}
 
         <div className={styles.checks}>
-          <span>🔒 security</span>
+          <span className={styles.checkTag}><Shield size={13} strokeWidth={2} /> security</span>
           <span className={styles.dot} />
-          <span>⚡ performance</span>
+          <span className={styles.checkTag}><Zap size={13} strokeWidth={2} /> performance</span>
           <span className={styles.dot} />
-          <span>🔍 seo</span>
+          <span className={styles.checkTag}><Search size={13} strokeWidth={2} /> seo</span>
           <span className={styles.dot} />
-          <span>♿ accessibility</span>
+          <span className={styles.checkTag}><Accessibility size={13} strokeWidth={2} /> accessibility</span>
           <span className={styles.dot} />
-          <span>🛡️ errors</span>
+          <span className={styles.checkTag}><ShieldAlert size={13} strokeWidth={2} /> errors</span>
           <span className={styles.dot} />
-          <span>📱 best practices</span>
+          <span className={styles.checkTag}><Star size={13} strokeWidth={2} /> best practices</span>
         </div>
       </div>
 
