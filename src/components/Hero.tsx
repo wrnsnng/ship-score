@@ -95,6 +95,9 @@ export function Hero({ onScan, loading, error }: HeroProps) {
           <br />
           Because "it works on my machine" isn't a deployment strategy.
         </p>
+        <p className={styles.attribution}>
+          A <a href="https://common-tools.co" target="_blank" rel="noopener noreferrer">Common Tools</a> project
+        </p>
       </footer>
     </div>
   );

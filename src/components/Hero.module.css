@@ -180,10 +180,9 @@
 /* --- Footer --- */
 
 .footer {
-  position: fixed;
-  bottom: var(--sp-8);
-  left: 0;
-  right: 0;
+  margin-top: auto;
+  padding-top: var(--sp-12);
+  padding-bottom: var(--sp-8);
   text-align: center;
 }
 
@@ -192,4 +191,19 @@
   line-height: 1.6;
   color: var(--color-text-muted);
   opacity: 0.4;
+}
+
+.attribution {
+  margin-top: var(--sp-4);
+  font-size: 0.6875rem;
+}
+
+.attribution a {
+  color: var(--color-text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.attribution a:hover {
+  color: var(--color-text);
 }
