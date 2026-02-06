@@ -8,8 +8,8 @@
   --color-border: rgba(255, 255, 255, 0.06);
   --color-border-active: rgba(255, 255, 255, 0.1);
   --color-text: #e8e8e4;
-  --color-text-secondary: #a1a19a;
-  --color-text-muted: #6b6b65;
+  --color-text-secondary: #b0b0a8;
+  --color-text-muted: #8a8a82;
 
   /* Grades — desaturated, confident, not neon */
   --color-grade-a: #4ade80;
@@ -64,10 +64,23 @@
 
 html {
   font-family: var(--font-sans);
-  font-size: 15px;
+  font-size: 16px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+/* Scale up for high-DPI / large displays */
+@media (min-width: 1800px) {
+  html {
+    font-size: 18px;
+  }
+}
+
+@media (min-width: 2400px) {
+  html {
+    font-size: 20px;
+  }
 }
 
 body {
