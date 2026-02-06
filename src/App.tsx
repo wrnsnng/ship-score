@@ -4,6 +4,60 @@ import { Report } from "./components/Report";
 import type { ScanResult } from "./types";
 import styles from "./App.module.css";
 
+// Update OG meta tags for sharing
+function updateOGTags(result: ScanResult | null) {
+  // Remove existing OG tags
+  const existingTags = document.querySelectorAll('meta[property^="og:"], meta[name^="twitter:"]');
+  existingTags.forEach(tag => tag.remove());
+
+  if (!result) {
+    // Reset to defaults
+    document.title = "Ship Score – Is your site ready to ship?";
+    return;
+  }
+
+  const domain = result.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  document.title = `${result.overallGrade} (${result.overallScore}/100) – ${domain} | Ship Score`;
+
+  // Build OG image URL with params
+  const categories = result.categories.map(c => ({
+    name: c.name,
+    grade: c.grade,
+    emoji: c.emoji,
+  }));
+  
+  const ogImageUrl = new URL("/api/og", window.location.origin);
+  ogImageUrl.searchParams.set("url", result.url);
+  ogImageUrl.searchParams.set("score", String(result.overallScore));
+  ogImageUrl.searchParams.set("grade", result.overallGrade);
+  ogImageUrl.searchParams.set("categories", JSON.stringify(categories));
+
+  const description = `${domain} scored ${result.overallGrade} (${result.overallScore}/100) on Ship Score. Check security, performance, SEO, and accessibility in one scan.`;
+
+  // Add OG tags
+  const ogTags = [
+    { property: "og:title", content: `${result.overallGrade} – ${domain} | Ship Score` },
+    { property: "og:description", content: description },
+    { property: "og:image", content: ogImageUrl.toString() },
+    { property: "og:url", content: window.location.href },
+    { property: "og:type", content: "website" },
+    { property: "og:site_name", content: "Ship Score" },
+    { name: "twitter:card", content: "summary_large_image" },
+    { name: "twitter:title", content: `${result.overallGrade} – ${domain} | Ship Score` },
+    { name: "twitter:description", content: description },
+    { name: "twitter:image", content: ogImageUrl.toString() },
+  ];
+
+  const head = document.head;
+  for (const tag of ogTags) {
+    const meta = document.createElement("meta");
+    if (tag.property) meta.setAttribute("property", tag.property);
+    if (tag.name) meta.setAttribute("name", tag.name);
+    meta.setAttribute("content", tag.content);
+    head.appendChild(meta);
+  }
+}
+
 export function App() {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [previousResult, setPreviousResult] = useState<ScanResult | null>(null);
@@ -12,6 +66,11 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const initialScanDone = useRef(false);
   const currentUrl = useRef<string | null>(null);
+
+  // Update OG tags when result changes
+  useEffect(() => {
+    updateOGTags(result);
+  }, [result]);
 
   // Check for URL param on mount and auto-scan
   useEffect(() => {

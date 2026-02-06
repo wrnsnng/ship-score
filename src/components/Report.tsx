@@ -14,8 +14,11 @@ import {
   Copy,
   CheckCircle,
   AlertTriangle,
+  RefreshCw,
+  Download,
 } from "lucide-react";
 import type { ScanResult, Category, Check as CheckType, Grade, OGData } from "../types";
+import { BadgeEmbed } from "./BadgeEmbed";
 import styles from "./Report.module.css";
 
 const CATEGORY_ICONS: Record<string, React.ElementType> = {
@@ -30,6 +33,9 @@ const CATEGORY_ICONS: Record<string, React.ElementType> = {
 interface ReportProps {
   result: ScanResult;
   onReset: () => void;
+  onRescan?: () => Promise<ScanResult | null>;
+  previousResult?: ScanResult | null;
+  isRescanning?: boolean;
 }
 
 function gradeColor(grade: Grade) {
@@ -67,7 +73,7 @@ function gradeVerdict(grade: Grade): string {
 
 type ViewMode = "priority" | "category";
 
-export function Report({ result, onReset }: ReportProps) {
+export function Report({ result, onReset, onRescan, previousResult, isRescanning }: ReportProps) {
   const domain = result.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
   const [copied, setCopied] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("priority");
@@ -138,9 +144,23 @@ export function Report({ result, onReset }: ReportProps) {
           <ArrowLeft size={14} strokeWidth={2} /> new scan
         </button>
         <div className={styles.headerRight}>
+          {onRescan && (
+            <button 
+              className={`${styles.rescanBtn} ${isRescanning ? styles.rescanning : ""}`}
+              onClick={onRescan}
+              disabled={isRescanning}
+            >
+              <RefreshCw size={14} strokeWidth={2} className={isRescanning ? styles.spinning : ""} />
+              {isRescanning ? "scanning..." : "re-scan"}
+            </button>
+          )}
           <button className={styles.shareBtn} onClick={handleCopyLink}>
             <Link size={14} strokeWidth={2} />
             {copied ? "copied!" : "share"}
+          </button>
+          <button className={styles.downloadBtn} onClick={() => window.print()}>
+            <Download size={14} strokeWidth={2} />
+            <span className={styles.downloadLabel}>PDF</span>
           </button>
           <span className={styles.meta}>
             {(result.scanTimeMs / 1000).toFixed(1)}s
@@ -284,6 +304,9 @@ export function Report({ result, onReset }: ReportProps) {
           )}
         </section>
       )}
+
+      {/* Badge embed */}
+      <BadgeEmbed url={result.url} grade={result.overallGrade} />
 
       <footer className={styles.footer}>
         <p>
