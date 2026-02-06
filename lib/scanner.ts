@@ -9,7 +9,15 @@ export interface ScanResult {
   overallGrade: Grade;
   categories: Category[];
   scanTimeMs: number;
+  jsFrameworkDetected?: boolean;
+  jsFrameworkNotice?: string;
   ogData?: OGData;
+}
+
+export interface OGData {
+  title?: string;
+  description?: string;
+  image?: string;
 }
 
 export type Grade = "A" | "B" | "C" | "D" | "F";
@@ -36,7 +44,7 @@ export interface Check {
 export interface FixSnippet {
   title: string;
   code: string;
-  language: "html" | "json" | "htaccess" | "text";
+  language: "html" | "json" | "htaccess" | "text" | "nginx";
   note?: string;
 }
 
@@ -69,14 +77,28 @@ export async function scan(url: string): Promise<ScanResult> {
   const $ = cheerio.load(html);
   const finalUrl = response.url;
 
+  // Detect JS framework rendering
+  const jsFrameworkInfo = detectJsFramework($, html);
+
+  // Collect OG data for social preview
+  const ogData: OGData = {
+    title: $('meta[property="og:title"]').attr("content"),
+    description: $('meta[property="og:description"]').attr("content"),
+    image: $('meta[property="og:image"]').attr("content"),
+  };
+
+  // Fetch robots.txt and sitemap.xml in parallel
+  const base = new URL(finalUrl);
+  const [robotsResult, sitemapResult] = await Promise.all([
+    fetchRobotsTxt(base.origin),
+    fetchSitemap(base.origin),
+  ]);
+
   // Run all category checks
-  const seoResult = runSEOChecks($, finalUrl);
-  const { ogData, ...seoCategory } = seoResult;
-  
   const categories: Category[] = [
-    runSecurityChecks(headers, finalUrl, html),
+    runSecurityChecks(headers, finalUrl, html, $),
     runPerformanceChecks(headers, html, $),
-    seoCategory,
+    runSEOChecks($, finalUrl, robotsResult, sitemapResult),
     runAccessibilityChecks($),
     runErrorHandlingChecks(url),
     runBestPracticesChecks(headers, $, finalUrl),
@@ -92,7 +114,7 @@ export async function scan(url: string): Promise<ScanResult> {
     categories.reduce((sum, c) => sum + c.score, 0) / categories.length
   );
 
-  return {
+  const result: ScanResult = {
     url: finalUrl,
     scannedAt: new Date().toISOString(),
     overallScore,
@@ -101,6 +123,134 @@ export async function scan(url: string): Promise<ScanResult> {
     scanTimeMs: Date.now() - start,
     ogData,
   };
+
+  // Add JS framework notice if detected
+  if (jsFrameworkInfo.detected) {
+    result.jsFrameworkDetected = true;
+    result.jsFrameworkNotice = jsFrameworkInfo.notice;
+  }
+
+  return result;
+}
+
+// --- JS Framework Detection ---
+
+interface JsFrameworkDetection {
+  detected: boolean;
+  frameworks: string[];
+  notice: string;
+}
+
+function detectJsFramework($: cheerio.CheerioAPI, html: string): JsFrameworkDetection {
+  const frameworks: string[] = [];
+
+  // Check for Next.js
+  if ($("#__next").length > 0 || html.includes("window.__NEXT_DATA__") || html.includes("_next/static")) {
+    frameworks.push("Next.js");
+  }
+
+  // Check for Nuxt
+  if ($("#__nuxt").length > 0 || html.includes("window.__NUXT__") || html.includes("_nuxt/")) {
+    frameworks.push("Nuxt");
+  }
+
+  // Check for React (create-react-app style)
+  const rootDiv = $("#root");
+  if (rootDiv.length > 0) {
+    const rootContent = rootDiv.html()?.trim() || "";
+    // Empty or near-empty root div suggests client-side rendering
+    if (rootContent.length < 100 || rootContent === "" || rootContent.includes("noscript")) {
+      frameworks.push("React");
+    }
+  }
+
+  // Check for Vue (generic)
+  const appDiv = $("#app");
+  if (appDiv.length > 0) {
+    const appContent = appDiv.html()?.trim() || "";
+    if (appContent.length < 100 || appContent === "") {
+      frameworks.push("Vue");
+    }
+  }
+
+  // Check for Angular
+  if ($("[ng-app], [data-ng-app], app-root").length > 0 || html.includes("ng-version")) {
+    frameworks.push("Angular");
+  }
+
+  // Check for large script bundles (>500KB total suggests heavy SPA)
+  const inlineScriptSize = $("script:not([src])")
+    .toArray()
+    .reduce((sum, el) => sum + ($(el).html()?.length || 0), 0);
+
+  if (inlineScriptSize > 500_000) {
+    if (frameworks.length === 0) {
+      frameworks.push("SPA");
+    }
+  }
+
+  const detected = frameworks.length > 0;
+  const frameworkList = frameworks.length > 0 ? frameworks.join("/") : "";
+
+  return {
+    detected,
+    frameworks,
+    notice: detected
+      ? `This site appears to use client-side rendering (${frameworkList}). Some checks like heading structure, alt text, and form labels may not reflect the actual rendered page — we're only seeing what the server sends before JavaScript runs.`
+      : "",
+  };
+}
+
+// --- Fetch helpers for robots.txt and sitemap ---
+
+interface RobotsResult {
+  exists: boolean;
+  valid: boolean;
+  content?: string;
+  error?: string;
+}
+
+interface SitemapResult {
+  exists: boolean;
+  error?: string;
+}
+
+async function fetchRobotsTxt(origin: string): Promise<RobotsResult> {
+  try {
+    const res = await fetch(`${origin}/robots.txt`, {
+      signal: AbortSignal.timeout(5000),
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; ShipScore/1.0; +https://shipscore.dev)" },
+    });
+
+    if (res.status === 200) {
+      const content = await res.text();
+      // Basic validation: should contain User-agent or Allow/Disallow
+      const isValid = /user-agent|allow|disallow|sitemap/i.test(content);
+      return { exists: true, valid: isValid, content };
+    }
+    return { exists: false, valid: false };
+  } catch (e) {
+    return { exists: false, valid: false, error: String(e) };
+  }
+}
+
+async function fetchSitemap(origin: string): Promise<SitemapResult> {
+  try {
+    const res = await fetch(`${origin}/sitemap.xml`, {
+      signal: AbortSignal.timeout(5000),
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; ShipScore/1.0; +https://shipscore.dev)" },
+    });
+
+    if (res.status === 200) {
+      const content = await res.text();
+      // Basic validation: should be XML with urlset or sitemapindex
+      const isValid = content.includes("<urlset") || content.includes("<sitemapindex");
+      return { exists: isValid };
+    }
+    return { exists: false };
+  } catch (e) {
+    return { exists: false, error: String(e) };
+  }
 }
 
 // --- Helpers ---
@@ -138,186 +288,179 @@ function makeCategory(
 function runSecurityChecks(
   headers: Record<string, string>,
   url: string,
-  html: string
+  html: string,
+  $: cheerio.CheerioAPI
 ): Category {
-  const hasHttps = url.startsWith("https://");
-  const hasHsts = !!headers["strict-transport-security"];
-  const hasCsp = !!(
-    headers["content-security-policy"] ||
-    headers["content-security-policy-report-only"]
-  );
-  const hasXFrame = !!(
-    headers["x-frame-options"] ||
-    (headers["content-security-policy"] &&
-      headers["content-security-policy"].includes("frame-ancestors"))
-  );
-  const hasNoSniff = headers["x-content-type-options"] === "nosniff";
-  const hasSecrets = hasExposedSecrets(html);
+  // Check for mixed content (HTTP resources on HTTPS page)
+  const isHttps = url.startsWith("https://");
+  const mixedContentUrls: string[] = [];
+  
+  if (isHttps) {
+    $("[src], [href]").each((_, el) => {
+      const src = $(el).attr("src") || $(el).attr("href") || "";
+      if (src.startsWith("http://") && !src.includes("localhost")) {
+        mixedContentUrls.push(src.slice(0, 60));
+      }
+    });
+  }
 
   const checks: Check[] = [
     {
       id: "https",
-      name: "HTTPS",
-      description: "Site is served over HTTPS",
-      passed: hasHttps,
+      name: "HTTPS encryption",
+      description: "Your site should encrypt all traffic so no one can spy on your visitors.",
+      passed: isHttps,
       severity: "critical",
-      detail: hasHttps
-        ? "Your site uses HTTPS. Good."
-        : "Your site is served over plain HTTP. Anyone on the same network can see and modify your traffic.",
-      ...(!hasHttps && {
-        fix: {
-          title: "Enable HTTPS on your hosting provider",
-          code: `Most hosts provide free SSL certificates. Check your hosting dashboard for:
-• Vercel: Automatic HTTPS on all deployments
-• Netlify: Enable HTTPS in Site settings > Domain management
-• Cloudflare: Enable "Always Use HTTPS" in SSL/TLS settings`,
-          language: "text" as const,
-          note: "After enabling, update all internal links to use https://",
-        },
-      }),
+      detail: isHttps
+        ? "Your site uses HTTPS — all traffic between visitors and your server is encrypted."
+        : "Your site sends data in plain text. Anyone on the same Wi-Fi network (like a coffee shop) can see passwords, form submissions, and everything else your visitors send.",
+      fix: !isHttps
+        ? {
+            title: "Enable HTTPS",
+            code: `# Most hosts offer free SSL certificates via Let's Encrypt.
+# If you're using a CDN like Cloudflare, enable "Always Use HTTPS"
+# For manual setup, install certbot and run:
+certbot --nginx -d yourdomain.com`,
+            language: "text",
+            note: "Contact your hosting provider — most offer one-click SSL now.",
+          }
+        : undefined,
     },
     {
       id: "hsts",
-      name: "Strict Transport Security",
-      description: "HSTS header forces browsers to use HTTPS",
-      passed: hasHsts,
+      name: "Force HTTPS (HSTS)",
+      description: "Tell browsers to always use HTTPS, even if someone types http://.",
+      passed: !!headers["strict-transport-security"],
       severity: "critical",
-      detail: hasHsts
-        ? `HSTS is set: ${headers["strict-transport-security"]}`
-        : "No HSTS header. Browsers can be tricked into using HTTP even if HTTPS is available.",
-      ...(!hasHsts && {
-        fix: {
-          title: "Add HSTS header (vercel.json)",
-          code: `{
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "Strict-Transport-Security",
-          "value": "max-age=31536000; includeSubDomains"
-        }
-      ]
-    }
-  ]
-}`,
-          language: "json" as const,
-          note: "Start with a short max-age (86400 = 1 day) to test, then increase to 31536000 (1 year)",
-        },
-      }),
+      detail: headers["strict-transport-security"]
+        ? `Browsers are told to always use HTTPS. Current policy: ${headers["strict-transport-security"]}`
+        : "Without HSTS, attackers can intercept the first request before the redirect to HTTPS happens. This 'downgrade attack' can steal cookies and session tokens.",
+      fix: !headers["strict-transport-security"]
+        ? {
+            title: "Add HSTS header",
+            code: `Strict-Transport-Security: max-age=31536000; includeSubDomains`,
+            language: "text",
+            note: "Add this header in your server config or CDN settings. Start with a shorter max-age (like 86400) to test.",
+          }
+        : undefined,
     },
     {
       id: "csp",
       name: "Content Security Policy",
-      description: "CSP header prevents XSS and injection attacks",
-      passed: hasCsp,
+      description: "Control what scripts and resources can run on your page to prevent hackers from injecting malicious code.",
+      passed: !!(
+        headers["content-security-policy"] ||
+        headers["content-security-policy-report-only"]
+      ),
       severity: "warning",
-      detail: hasCsp
-        ? "CSP is configured."
-        : "No Content Security Policy. Your site is more vulnerable to cross-site scripting (XSS) attacks.",
-      ...(!hasCsp && {
-        fix: {
-          title: "Add Content Security Policy header (vercel.json)",
-          code: `{
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'"
-        }
-      ]
-    }
-  ]
-}`,
-          language: "json" as const,
-          note: "This is a starter policy. Test thoroughly and adjust based on your site's needs.",
-        },
-      }),
+      detail: headers["content-security-policy"]
+        ? "Your site has a Content Security Policy that restricts what code can run."
+        : "Without CSP, if an attacker finds a way to inject code into your page (XSS), they can steal user data, hijack sessions, and redirect users to malicious sites. CSP limits the damage by only allowing trusted sources.",
+      fix: !(headers["content-security-policy"] || headers["content-security-policy-report-only"])
+        ? {
+            title: "Add basic Content Security Policy",
+            code: `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'`,
+            language: "text",
+            note: "This is a starter policy — you'll need to adjust it based on what third-party scripts you use (analytics, fonts, etc).",
+          }
+        : undefined,
     },
     {
       id: "x-frame",
       name: "Clickjacking protection",
-      description: "X-Frame-Options or CSP frame-ancestors prevents clickjacking",
-      passed: hasXFrame,
+      description: "Prevent your site from being embedded in a hidden iframe on a malicious page.",
+      passed: !!(
+        headers["x-frame-options"] ||
+        (headers["content-security-policy"] &&
+          headers["content-security-policy"].includes("frame-ancestors"))
+      ),
       severity: "warning",
-      detail: hasXFrame
-        ? `X-Frame-Options: ${headers["x-frame-options"] || "via CSP frame-ancestors"}`
-        : "No clickjacking protection. Your site could be embedded in a malicious iframe.",
-      ...(!hasXFrame && {
-        fix: {
-          title: "Add X-Frame-Options header (vercel.json)",
-          code: `{
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "X-Frame-Options",
-          "value": "DENY"
-        }
-      ]
-    }
-  ]
-}`,
-          language: "json" as const,
-          note: "Use SAMEORIGIN instead of DENY if you need to embed your site in your own iframes",
-        },
-      }),
+      detail: headers["x-frame-options"] ||
+        (headers["content-security-policy"]?.includes("frame-ancestors"))
+        ? `Your page can't be embedded in malicious iframes. Current setting: ${headers["x-frame-options"] || "CSP frame-ancestors"}`
+        : "Attackers could overlay your site with invisible elements, tricking users into clicking things they can't see — like a 'Delete Account' button hidden under a 'Play Video' button.",
+      fix: !(headers["x-frame-options"] || headers["content-security-policy"]?.includes("frame-ancestors"))
+        ? {
+            title: "Add X-Frame-Options header",
+            code: `X-Frame-Options: DENY`,
+            language: "text",
+            note: "Use DENY to block all framing, or SAMEORIGIN if you need to embed your own pages.",
+          }
+        : undefined,
     },
     {
       id: "x-content-type",
-      name: "Content type sniffing protection",
-      description: "X-Content-Type-Options prevents MIME-type sniffing",
-      passed: hasNoSniff,
+      name: "File type protection",
+      description: "Stop browsers from guessing file types, which could let attackers disguise malicious files.",
+      passed: headers["x-content-type-options"] === "nosniff",
       severity: "info",
-      detail: hasNoSniff
-        ? "nosniff is set."
-        : "Missing X-Content-Type-Options: nosniff. Browsers might interpret files as a different type than intended.",
-      ...(!hasNoSniff && {
-        fix: {
-          title: "Add X-Content-Type-Options header (vercel.json)",
-          code: `{
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "X-Content-Type-Options",
-          "value": "nosniff"
-        }
-      ]
-    }
-  ]
-}`,
-          language: "json" as const,
-        },
-      }),
+      detail: headers["x-content-type-options"]
+        ? "Browsers won't try to guess file types — they'll trust what your server says."
+        : "Browsers sometimes 'sniff' file contents to guess the type. An attacker could upload a file that looks like an image but contains JavaScript, and the browser might execute it.",
+      fix: headers["x-content-type-options"] !== "nosniff"
+        ? {
+            title: "Add X-Content-Type-Options header",
+            code: `X-Content-Type-Options: nosniff`,
+            language: "text",
+            note: "Add this to your server configuration or CDN headers.",
+          }
+        : undefined,
     },
     {
       id: "exposed-secrets",
-      name: "No exposed secrets in HTML",
-      description: "Page source doesn't contain obvious API keys or tokens",
-      passed: !hasSecrets,
+      name: "No exposed API keys",
+      description: "Make sure secret keys and tokens aren't accidentally visible in your page source.",
+      passed: !hasExposedSecrets(html),
       severity: "critical",
-      detail: hasSecrets
-        ? "⚠️ Found patterns that look like exposed API keys or secrets in your page source!"
-        : "No obvious API keys or secrets found in page source.",
-      ...(hasSecrets && {
-        fix: {
-          title: "Remove secrets from client-side code",
-          code: `1. Move API keys to server-side environment variables
-2. Use server-side API routes instead of client-side fetch
-3. Rotate any exposed keys immediately
-4. Add .env to .gitignore if not already
+      detail: hasExposedSecrets(html)
+        ? "⚠️ Found patterns that look like exposed API keys or secrets in your HTML! Anyone can view your page source and steal these credentials. They could rack up charges on your accounts or access your data."
+        : "We scanned for common patterns like Stripe keys, AWS credentials, and GitHub tokens — none found in your page source.",
+      fix: hasExposedSecrets(html)
+        ? {
+            title: "Move secrets to server-side",
+            code: `# Never put secret keys in client-side code
+# Instead, create a server endpoint:
+app.get('/api/data', (req, res) => {
+  // Use process.env.API_KEY here — it stays on the server
+  const data = await fetch(externalAPI, {
+    headers: { 'Authorization': process.env.API_KEY }
+  });
+  res.json(data);
+});`,
+            language: "text",
+            note: "If you've exposed a key, rotate it immediately — assume it's been compromised.",
+          }
+        : undefined,
+    },
+    {
+      id: "mixed-content",
+      name: "No mixed content",
+      description: "All resources should load over HTTPS to maintain the secure connection.",
+      passed: mixedContentUrls.length === 0,
+      severity: isHttps ? "critical" : "info",
+      detail: mixedContentUrls.length === 0
+        ? isHttps
+          ? "All resources load over HTTPS — your secure connection isn't broken by insecure elements."
+          : "N/A — site isn't using HTTPS yet."
+        : `Found ${mixedContentUrls.length} resource(s) loading over plain HTTP: ${mixedContentUrls.slice(0, 3).join(", ")}${mixedContentUrls.length > 3 ? "..." : ""}. Modern browsers block some mixed content, and the rest compromises your security.`,
+      fix: mixedContentUrls.length > 0
+        ? {
+            title: "Fix mixed content",
+            code: `<!-- Change http:// to https:// in all resource URLs -->
+<!-- Before: -->
+<script src="http://example.com/script.js"></script>
+<img src="http://cdn.example.com/image.jpg">
 
-Example: Instead of fetch('https://api.example.com?key=SECRET')
-Use: fetch('/api/proxy') → server calls external API`,
-          language: "text" as const,
-          note: "⚠️ If you've exposed production keys, rotate them immediately!",
-        },
-      }),
+<!-- After: -->
+<script src="https://example.com/script.js"></script>
+<img src="https://cdn.example.com/image.jpg">
+
+<!-- Or use protocol-relative URLs (less recommended): -->
+<script src="//example.com/script.js"></script>`,
+            language: "html",
+            note: "Check images, scripts, stylesheets, fonts, and iframes for http:// URLs.",
+          }
+        : undefined,
     },
   ];
 
@@ -347,205 +490,273 @@ function runPerformanceChecks(
   const scripts = $("script[src]").length;
   const stylesheets = $('link[rel="stylesheet"]').length;
   const images = $("img").length;
-  const lazyImages = $("img[loading='lazy']").length;
-  const inlineScriptSize = $("script:not([src])")
-    .toArray()
-    .reduce((sum, el) => sum + ($(el).html()?.length || 0), 0);
+  
+  const inlineScripts = $("script:not([src])").toArray();
+  const inlineScriptSize = inlineScripts.reduce((sum, el) => sum + ($(el).html()?.length || 0), 0);
+  const largeInlineJs = inlineScriptSize > 50_000;
 
-  const htmlSizeOk = htmlSize < 100_000;
-  const scriptsOk = scripts <= 10;
-  const stylesheetsOk = stylesheets <= 5;
-  const hasCompression = !!(
-    headers["content-encoding"] &&
-    (headers["content-encoding"].includes("gzip") ||
-      headers["content-encoding"].includes("br"))
-  );
-  const inlineJsOk = inlineScriptSize < 50_000;
-  const imagesOk = images <= 20 || lazyImages > images * 0.5;
-  const hasCaching = !!(headers["cache-control"] || headers["etag"]);
+  // Check for render-blocking resources
+  const renderBlockingScripts = $("head script:not([async]):not([defer]):not([type='module'])[src]").length;
+  const renderBlockingStyles = $("head link[rel='stylesheet']:not([media])").length;
+  const hasRenderBlocking = renderBlockingScripts > 0 || renderBlockingStyles > 3;
 
   const checks: Check[] = [
     {
       id: "html-size",
       name: "HTML document size",
-      description: "Initial HTML should be under 100KB for fast loading",
-      passed: htmlSizeOk,
+      description: "Keep your initial HTML small so the page starts rendering quickly, even on slow connections.",
+      passed: htmlSize < 100_000,
       severity: "warning",
-      detail: `HTML is ${(htmlSize / 1024).toFixed(1)}KB. ${!htmlSizeOk ? "That's large — consider reducing inline content or deferring data loading." : "Good size."}`,
-      ...(!htmlSizeOk && {
-        fix: {
-          title: "Reduce HTML document size",
-          code: `Common causes and fixes:
-1. Inline JSON data: Move to separate API endpoint
-2. Inline SVGs: Move to external files or sprite
-3. Inline styles: Extract to CSS files
-4. Duplicated content: Use template partials
+      detail: htmlSize < 100_000
+        ? `Your HTML is ${(htmlSize / 1024).toFixed(1)}KB — compact enough for quick initial loading.`
+        : `Your HTML is ${(htmlSize / 1024).toFixed(1)}KB, which is quite large. On a 3G connection, just downloading the HTML takes over ${(htmlSize / 50000).toFixed(1)} seconds. Move data to API calls or paginate content.`,
+      fix: htmlSize >= 100_000
+        ? {
+            title: "Reduce HTML size",
+            code: `<!-- Instead of embedding all data in HTML: -->
+<script>
+  window.__DATA__ = { /* 80KB of JSON */ };
+</script>
 
-For React/Next.js - avoid getServerSideProps with large data.
-Consider pagination or lazy loading for data-heavy pages.`,
-          language: "text" as const,
-        },
-      }),
+<!-- Load it asynchronously: -->
+<script>
+  fetch('/api/data').then(r => r.json()).then(data => {
+    // render with data
+  });
+</script>`,
+            language: "html",
+            note: "Consider pagination, infinite scroll, or loading data on demand.",
+          }
+        : undefined,
     },
     {
       id: "script-count",
-      name: "External script count",
-      description: "Too many scripts slow down page load",
-      passed: scriptsOk,
+      name: "External scripts",
+      description: "Each script file requires a separate network request, slowing down page load.",
+      passed: scripts <= 10,
       severity: "warning",
-      detail: `${scripts} external script(s). ${!scriptsOk ? "Consider bundling or lazy-loading some scripts." : "Reasonable count."}`,
-      ...(!scriptsOk && {
-        fix: {
-          title: "Reduce script count",
-          code: `<!-- Defer non-critical scripts -->
-<script src="/analytics.js" defer></script>
-
-<!-- Lazy load with dynamic import -->
-<script type="module">
-  // Load heavy libraries on interaction
-  button.addEventListener('click', async () => {
-    const { heavyLib } = await import('./heavy-lib.js');
-    heavyLib.init();
-  });
-</script>`,
-          language: "html" as const,
-          note: "Use a bundler (Vite, Webpack) to combine scripts. Add defer to non-critical scripts.",
-        },
-      }),
+      detail: scripts <= 10
+        ? `${scripts} external script(s) — each browser can only download a few files at once, so this is manageable.`
+        : `${scripts} external scripts means ${scripts} separate network requests. Browsers queue these, and each has latency overhead. Bundle your scripts or use dynamic imports to load features on demand.`,
+      fix: scripts > 10
+        ? {
+            title: "Bundle scripts",
+            code: `// Use a bundler like Vite, webpack, or esbuild
+// vite.config.js
+export default {
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'lodash'], // Third-party code
+          // App code auto-bundled
+        }
+      }
+    }
+  }
+}`,
+            language: "text",
+            note: "Most modern frameworks bundle automatically. If you're loading many third-party scripts, audit which ones you actually need.",
+          }
+        : undefined,
     },
     {
       id: "stylesheet-count",
-      name: "Stylesheet count",
-      description: "Multiple stylesheets cause render-blocking",
-      passed: stylesheetsOk,
+      name: "Stylesheets",
+      description: "Browsers wait for stylesheets before showing content — too many slow down first paint.",
+      passed: stylesheets <= 5,
       severity: "info",
-      detail: `${stylesheets} external stylesheet(s). ${!stylesheetsOk ? "Consider combining stylesheets to reduce render-blocking." : "Fine."}`,
-      ...(!stylesheetsOk && {
-        fix: {
-          title: "Combine and optimize stylesheets",
-          code: `<!-- Preload critical CSS -->
-<link rel="preload" href="/critical.css" as="style">
-<link rel="stylesheet" href="/critical.css">
+      detail: stylesheets <= 5
+        ? `${stylesheets} stylesheet(s) — the browser can handle this without significant delay.`
+        : `${stylesheets} stylesheets means the browser must download and parse all of them before painting anything. Your users see a white screen while waiting. Combine them into one or two files.`,
+      fix: stylesheets > 5
+        ? {
+            title: "Combine stylesheets",
+            code: `<!-- Before: multiple stylesheet requests -->
+<link rel="stylesheet" href="/css/reset.css">
+<link rel="stylesheet" href="/css/typography.css">
+<link rel="stylesheet" href="/css/layout.css">
+<link rel="stylesheet" href="/css/components.css">
 
-<!-- Load non-critical CSS asynchronously -->
-<link rel="preload" href="/non-critical.css" as="style" 
-      onload="this.onload=null;this.rel='stylesheet'">`,
-          language: "html" as const,
-          note: "Use a CSS bundler to combine files. Inline critical CSS for above-the-fold content.",
-        },
-      }),
+<!-- After: single bundled file -->
+<link rel="stylesheet" href="/css/styles.css">
+
+/* Or inline critical CSS: */
+<style>
+  /* Only styles needed for above-the-fold content */
+</style>
+<link rel="stylesheet" href="/css/styles.css" media="print" onload="this.media='all'">`,
+            language: "html",
+            note: "Use a CSS bundler or build tool to combine files automatically.",
+          }
+        : undefined,
     },
     {
       id: "compression",
       name: "Response compression",
-      description: "Server should use gzip or brotli compression",
-      passed: hasCompression,
+      description: "Compress your files to reduce download times — gzip can cut sizes by 60-80%.",
+      passed: !!(
+        headers["content-encoding"] &&
+        (headers["content-encoding"].includes("gzip") ||
+          headers["content-encoding"].includes("br"))
+      ),
       severity: "warning",
-      detail: hasCompression
-        ? `Compression: ${headers["content-encoding"]}`
-        : "No compression detected. Enabling gzip/brotli can reduce transfer size by 60-80%.",
-      ...(!hasCompression && {
-        fix: {
-          title: "Enable compression (vercel.json - automatic on Vercel)",
-          code: `// Vercel enables compression by default.
-// For other hosts, configure in server or CDN:
-
-// nginx.conf
+      detail: headers["content-encoding"]
+        ? `Your server compresses responses using ${headers["content-encoding"]} — files are much smaller over the wire.`
+        : "Your server sends uncompressed files. A 100KB JavaScript file could be 25KB with gzip. That's 4x faster downloads for free.",
+      fix: !headers["content-encoding"]
+        ? {
+            title: "Enable compression",
+            code: `# Nginx
 gzip on;
-gzip_types text/html text/css application/javascript;
+gzip_types text/plain text/css application/json application/javascript text/xml;
 
-// Express.js
-const compression = require('compression');
-app.use(compression());`,
-          language: "text" as const,
-          note: "Most modern hosts (Vercel, Netlify, Cloudflare) enable compression automatically.",
-        },
-      }),
+# Apache (.htaccess)
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css application/javascript
+</IfModule>
+
+# Vercel/Netlify/Cloudflare: Enabled by default`,
+            language: "nginx",
+            note: "Most CDNs and modern hosting platforms enable this automatically.",
+          }
+        : undefined,
     },
     {
       id: "inline-js-size",
       name: "Inline JavaScript size",
-      description: "Large inline scripts block rendering",
-      passed: inlineJsOk,
+      description: "Large chunks of JavaScript in your HTML can't be cached and block rendering.",
+      passed: !largeInlineJs,
       severity: "info",
-      detail: `${(inlineScriptSize / 1024).toFixed(1)}KB of inline JavaScript. ${!inlineJsOk ? "Consider moving to external files for better caching." : "Acceptable."}`,
-      ...(!inlineJsOk && {
-        fix: {
-          title: "Move inline scripts to external files",
-          code: `<!-- Before: inline script blocking render -->
+      detail: !largeInlineJs
+        ? `${(inlineScriptSize / 1024).toFixed(1)}KB of inline JavaScript — small enough to not significantly impact loading.`
+        : `${(inlineScriptSize / 1024).toFixed(1)}KB of inline JavaScript! This code is downloaded fresh on every page load (can't be cached), and browsers must parse it before rendering. Move it to external files.`,
+      fix: largeInlineJs
+        ? {
+            title: "Move to external files",
+            code: `<!-- Before: large inline script -->
 <script>
-  // 50KB+ of JavaScript here...
+  // 50KB of code here...
 </script>
 
-<!-- After: external file with defer -->
-<script src="/app.js" defer></script>`,
-          language: "html" as const,
-          note: "External scripts can be cached. Use defer for non-blocking loading.",
-        },
-      }),
+<!-- After: external file (cacheable) -->
+<script src="/js/app.js" defer></script>`,
+            language: "html",
+            note: "Keep only tiny, critical bootstrap code inline. The rest should be in external, cacheable files.",
+          }
+        : undefined,
+    },
+    {
+      id: "large-inline-js",
+      name: "No huge inline scripts",
+      description: "Inline scripts over 50KB seriously hurt loading performance and can't be cached.",
+      passed: inlineScriptSize < 50_000,
+      severity: "warning",
+      detail: inlineScriptSize < 50_000
+        ? `Total inline JavaScript is ${(inlineScriptSize / 1024).toFixed(1)}KB — within acceptable limits.`
+        : `You have ${(inlineScriptSize / 1024).toFixed(1)}KB of inline JavaScript. This can't be cached between page loads, must be re-parsed every time, and blocks the browser from rendering. Split it into external files that browsers can cache.`,
+      fix: inlineScriptSize >= 50_000
+        ? {
+            title: "Extract large inline scripts",
+            code: `// Create separate JS files for your code
+// Before (in HTML):
+<script>
+  const hugeConfig = { /* KB of data */ };
+  function init() { /* lots of code */ }
+</script>
+
+// After:
+<script src="/js/config.js" defer></script>
+<script src="/js/app.js" defer></script>
+
+// The defer attribute ensures scripts run in order after HTML parsing`,
+            language: "html",
+            note: "If you're inlining app state/data, fetch it via an API instead.",
+          }
+        : undefined,
     },
     {
       id: "image-count",
-      name: "Image count",
-      description: "Many images without lazy loading impact initial load",
-      passed: imagesOk,
+      name: "Lazy loading for images",
+      description: "Images below the fold should load lazily so they don't compete with essential content.",
+      passed: images <= 20 || $("img[loading='lazy']").length > images * 0.5,
       severity: "info",
-      detail: `${images} image(s), ${lazyImages} with lazy loading. ${!imagesOk ? "Consider adding loading='lazy' to below-the-fold images." : "OK."}`,
-      ...(!imagesOk && {
-        fix: {
-          title: "Add lazy loading to images",
-          code: `<!-- Add loading="lazy" to below-the-fold images -->
-<img src="/photo.jpg" alt="Description" loading="lazy">
+      detail:
+        images === 0
+          ? "No images on this page."
+          : images <= 20 || $("img[loading='lazy']").length > images * 0.5
+            ? `${$("img[loading='lazy']").length} of ${images} images use lazy loading — below-fold images won't slow down initial load.`
+            : `Only ${$("img[loading='lazy']").length} of ${images} images use lazy loading. The rest start downloading immediately, fighting for bandwidth with your CSS and JavaScript.`,
+      fix: images > 20 && $("img[loading='lazy']").length < images * 0.5
+        ? {
+            title: "Add lazy loading to images",
+            code: `<!-- Add loading="lazy" to images below the fold -->
+<img src="photo.jpg" alt="Photo" loading="lazy">
 
-<!-- Keep above-the-fold images eager (default) -->
-<img src="/hero.jpg" alt="Hero" loading="eager">
-
-<!-- Use width/height to prevent layout shift -->
-<img src="/photo.jpg" alt="Description" 
-     loading="lazy" width="800" height="600">`,
-          language: "html" as const,
-          note: "Native lazy loading is supported by all modern browsers.",
-        },
-      }),
+<!-- Keep the first few images (above the fold) without lazy -->
+<img src="hero.jpg" alt="Hero image">`,
+            language: "html",
+            note: "Don't lazy-load your hero image or LCP element — that should load immediately.",
+          }
+        : undefined,
     },
     {
       id: "caching",
-      name: "Cache control",
-      description: "Proper caching headers improve repeat visits",
-      passed: hasCaching,
+      name: "Cache headers",
+      description: "Let browsers cache your files so returning visitors don't re-download everything.",
+      passed: !!(headers["cache-control"] || headers["etag"]),
       severity: "info",
-      detail: hasCaching
-        ? `Cache-Control: ${headers["cache-control"] || "ETag present"}`
-        : "No cache headers. Repeat visitors re-download everything.",
-      ...(!hasCaching && {
-        fix: {
-          title: "Add cache headers (vercel.json)",
-          code: `{
-  "headers": [
-    {
-      "source": "/assets/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
+      detail: headers["cache-control"] || headers["etag"]
+        ? `Caching enabled: ${headers["cache-control"] || `ETag: ${headers["etag"]}`}. Returning visitors load faster.`
+        : "No cache headers set. Every time someone revisits your page, they re-download everything from scratch — even files that haven't changed.",
+      fix: !(headers["cache-control"] || headers["etag"])
+        ? {
+            title: "Add cache headers",
+            code: `# Nginx
+location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff2)$ {
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+
+# Apache (.htaccess)
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType image/jpeg "access plus 1 year"
+    ExpiresByType text/css "access plus 1 year"
+    ExpiresByType application/javascript "access plus 1 year"
+</IfModule>`,
+            language: "nginx",
+            note: "Use versioned filenames (app.abc123.js) so you can cache forever and bust cache on changes.",
+          }
+        : undefined,
     },
     {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=0, must-revalidate"
-        }
-      ]
-    }
-  ]
-}`,
-          language: "json" as const,
-          note: "Cache static assets aggressively. Use cache-busting filenames (app.abc123.js).",
-        },
-      }),
+      id: "render-blocking",
+      name: "Render-blocking resources",
+      description: "Scripts and stylesheets in <head> without async/defer block the page from appearing.",
+      passed: !hasRenderBlocking,
+      severity: "warning",
+      detail: !hasRenderBlocking
+        ? "Good job — your critical resources are optimized to not block rendering."
+        : `Found ${renderBlockingScripts} blocking script(s) and ${renderBlockingStyles} stylesheet(s) in <head>. The browser can't show anything until these finish downloading and executing. Users see a blank screen.`,
+      fix: hasRenderBlocking
+        ? {
+            title: "Remove render-blocking resources",
+            code: `<!-- Make scripts non-blocking -->
+<script src="app.js" defer></script>  <!-- Runs after HTML parsed -->
+<script src="analytics.js" async></script>  <!-- Runs when ready -->
+
+<!-- Make non-critical CSS non-blocking -->
+<link rel="stylesheet" href="non-critical.css" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="non-critical.css"></noscript>
+
+<!-- Or inline critical CSS and defer the rest -->
+<style>/* Critical above-fold styles */</style>
+<link rel="preload" href="styles.css" as="style" onload="this.rel='stylesheet'">`,
+            language: "html",
+            note: "Keep only critical, above-the-fold styles synchronous. Everything else can load later.",
+          }
+        : undefined,
     },
   ];
 
@@ -554,165 +765,208 @@ app.use(compression());`,
 
 // --- SEO ---
 
-// OG data exported for social preview component
-export interface OGData {
-  title?: string;
-  description?: string;
-  image?: string;
-  url?: string;
-  siteName?: string;
-}
-
 function runSEOChecks(
   $: cheerio.CheerioAPI,
-  url: string
-): Category & { ogData: OGData } {
+  url: string,
+  robotsResult: RobotsResult,
+  sitemapResult: SitemapResult
+): Category {
   const title = $("title").text().trim();
   const metaDesc = $('meta[name="description"]').attr("content")?.trim() || "";
   const ogTitle = $('meta[property="og:title"]').attr("content");
   const ogDesc = $('meta[property="og:description"]').attr("content");
   const ogImage = $('meta[property="og:image"]').attr("content");
-  const ogSiteName = $('meta[property="og:site_name"]').attr("content");
   const canonical = $('link[rel="canonical"]').attr("href");
   const h1Count = $("h1").length;
-
-  const titleOk = title.length > 0 && title.length <= 70;
-  const descOk = metaDesc.length > 0 && metaDesc.length <= 160;
-  const ogComplete = !!(ogTitle && ogDesc && ogImage);
-  const h1Ok = h1Count === 1;
-
-  // Extract domain for examples
-  let domain = "example.com";
-  try {
-    domain = new URL(url).hostname;
-  } catch {}
 
   const checks: Check[] = [
     {
       id: "title",
       name: "Page title",
-      description: "Every page needs a descriptive title tag",
-      passed: titleOk,
+      description: "The title tag is your headline in search results — make it count.",
+      passed: title.length > 0 && title.length <= 70,
       severity: "critical",
-      detail: title
-        ? `Title: "${title}" (${title.length} chars). ${title.length > 70 ? "Consider shortening — search engines truncate after ~60 chars." : "Good length."}`
-        : "No title tag found. This is the most important SEO element.",
-      ...(!titleOk && {
-        fix: {
-          title: "Add a title tag",
-          code: `<title>Your Page Title | ${domain}</title>`,
-          language: "html" as const,
-          note: "Keep it under 60 characters. Include your brand name.",
-        },
-      }),
+      detail: !title
+        ? "No title tag found! This is the single most important SEO element. Search engines won't know what your page is about."
+        : title.length > 70
+          ? `Your title is ${title.length} characters: "${title.slice(0, 50)}...". Google cuts off around 60 characters, so your message gets truncated in search results.`
+          : `Title (${title.length} chars): "${title}" — good length, will display fully in search results.`,
+      fix: !title || title.length > 70
+        ? {
+            title: "Add or fix title tag",
+            code: `<head>
+  <title>Your Page Title | Brand Name</title>
+</head>
+
+<!-- Good title format: -->
+<!-- Primary keyword - Secondary info | Brand -->
+<!-- Example: "Running Shoes for Women - Free Shipping | Nike" -->`,
+            language: "html",
+            note: "Aim for 50-60 characters. Put the most important words first.",
+          }
+        : undefined,
     },
     {
       id: "meta-description",
       name: "Meta description",
-      description: "A compelling meta description improves click-through from search",
-      passed: descOk,
+      description: "This is your sales pitch in search results — tell people why they should click.",
+      passed: metaDesc.length > 0 && metaDesc.length <= 160,
       severity: "warning",
-      detail: metaDesc
-        ? `Description: "${metaDesc.slice(0, 80)}${metaDesc.length > 80 ? "..." : ""}" (${metaDesc.length} chars). ${metaDesc.length > 160 ? "Too long — will be truncated in search results." : "Good."}`
-        : "No meta description. Search engines will pick a random snippet from your page.",
-      ...(!descOk && {
-        fix: {
-          title: "Add meta description",
-          code: `<meta name="description" content="A compelling description of your page in 150-160 characters. Include keywords naturally and a call to action.">`,
-          language: "html" as const,
-          note: "Make it compelling — this is your ad copy in search results.",
-        },
-      }),
+      detail: !metaDesc
+        ? "No meta description. Google will grab random text from your page — probably not the message you want to send."
+        : metaDesc.length > 160
+          ? `Your description is ${metaDesc.length} characters — Google truncates after ~155, so your call-to-action might be cut off.`
+          : `Description (${metaDesc.length} chars): "${metaDesc.slice(0, 80)}${metaDesc.length > 80 ? "..." : ""}" — good length.`,
+      fix: !metaDesc || metaDesc.length > 160
+        ? {
+            title: "Add meta description",
+            code: `<head>
+  <meta name="description" content="A compelling 150-character summary that tells searchers exactly what they'll find and why they should click.">
+</head>`,
+            language: "html",
+            note: "Include your primary keyword naturally. Write for humans, not search engines.",
+          }
+        : undefined,
     },
     {
       id: "og-tags",
-      name: "Open Graph tags",
-      description: "OG tags control how your page looks when shared on social media",
-      passed: ogComplete,
+      name: "Social sharing tags",
+      description: "Control how your page looks when shared on Twitter, LinkedIn, and Facebook.",
+      passed: !!(ogTitle && ogDesc && ogImage),
       severity: "warning",
-      detail: [
-        ogTitle ? "✓ og:title" : "✗ og:title",
-        ogDesc ? "✓ og:description" : "✗ og:description",
-        ogImage ? "✓ og:image" : "✗ og:image",
-      ].join(", "),
-      ...(!ogComplete && {
-        fix: {
-          title: "Add Open Graph meta tags",
-          code: `<!-- Essential OG tags for social sharing -->
-<meta property="og:title" content="${title || "Your Page Title"}">
-<meta property="og:description" content="${metaDesc || "A brief description of your page"}">
-<meta property="og:image" content="https://${domain}/og-image.png">
-<meta property="og:url" content="${url}">
-<meta property="og:type" content="website">
-<meta property="og:site_name" content="${ogSiteName || domain}">
-
-<!-- Twitter Card tags (optional but recommended) -->
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="${title || "Your Page Title"}">
-<meta name="twitter:description" content="${metaDesc || "A brief description"}">
-<meta name="twitter:image" content="https://${domain}/og-image.png">`,
-          language: "html" as const,
-          note: "Image should be 1200x630px for best results. Test with Twitter Card Validator.",
-        },
-      }),
+      detail: ogTitle && ogDesc && ogImage
+        ? `Your page will look great when shared: custom title, description, and image all set.`
+        : `Missing: ${[!ogTitle && "og:title", !ogDesc && "og:description", !ogImage && "og:image"].filter(Boolean).join(", ")}. When someone shares your link, it'll look bland or grab random content.`,
+      fix: !(ogTitle && ogDesc && ogImage)
+        ? {
+            title: "Add Open Graph tags",
+            code: `<head>
+  <meta property="og:title" content="Your Page Title">
+  <meta property="og:description" content="A compelling description for social sharing">
+  <meta property="og:image" content="https://yoursite.com/social-image.png">
+  <meta property="og:url" content="https://yoursite.com/page">
+  <meta property="og:type" content="website">
+  
+  <!-- Also add Twitter-specific tags: -->
+  <meta name="twitter:card" content="summary_large_image">
+</head>`,
+            language: "html",
+            note: "Image should be at least 1200x630px for best display on most platforms.",
+          }
+        : undefined,
     },
     {
       id: "h1",
       name: "H1 heading",
-      description: "Each page should have exactly one H1",
-      passed: h1Ok,
+      description: "Your main headline tells search engines (and users) what this page is about.",
+      passed: h1Count === 1,
       severity: "warning",
       detail:
         h1Count === 0
-          ? "No H1 heading found. Search engines use this to understand your page's main topic."
+          ? "No H1 heading found. Without a clear main heading, search engines have to guess your page's topic."
           : h1Count === 1
-            ? `H1: "${$("h1").first().text().trim().slice(0, 60)}"`
-            : `${h1Count} H1 headings found. Use only one to avoid confusing search engines.`,
-      ...(!h1Ok && {
-        fix: {
-          title: h1Count === 0 ? "Add an H1 heading" : "Use only one H1",
-          code: h1Count === 0
-            ? `<h1>Your Main Page Heading</h1>`
-            : `<!-- Keep one H1, change others to H2 or lower -->
-<h1>Main Page Title</h1>
-<h2>Section Heading</h2>
-<h2>Another Section</h2>`,
-          language: "html" as const,
-          note: "H1 should describe the page's main topic. Other headings should be H2-H6.",
-        },
-      }),
+            ? `Found one H1: "${$("h1").first().text().trim().slice(0, 60)}" — perfect, clear hierarchy.`
+            : `Found ${h1Count} H1 headings. Multiple H1s dilute your page's focus — search engines don't know which is the main topic.`,
+      fix: h1Count !== 1
+        ? {
+            title: "Add single H1 heading",
+            code: `<!-- Each page should have exactly one H1 -->
+<h1>Your Main Page Headline</h1>
+
+<!-- Use H2, H3, etc. for subheadings -->
+<h2>Section heading</h2>
+<h3>Subsection heading</h3>`,
+            language: "html",
+            note: "The H1 should match the page's purpose — usually similar to the title tag.",
+          }
+        : undefined,
     },
     {
       id: "canonical",
       name: "Canonical URL",
-      description: "Canonical tag prevents duplicate content issues",
+      description: "Tell search engines which URL is the 'official' version to avoid duplicate content issues.",
       passed: !!canonical,
       severity: "info",
       detail: canonical
-        ? `Canonical: ${canonical}`
-        : "No canonical URL set. If this page is accessible at multiple URLs, search engines might see duplicates.",
-      ...(!canonical && {
-        fix: {
-          title: "Add canonical link",
-          code: `<link rel="canonical" href="${url}">`,
-          language: "html" as const,
-          note: "Use the preferred URL (with or without www, with or without trailing slash).",
-        },
-      }),
+        ? `Canonical URL set to: ${canonical}`
+        : "No canonical URL. If your page is accessible at multiple URLs (with/without www, with tracking params, etc.), search engines might see them as duplicates and split your ranking power.",
+      fix: !canonical
+        ? {
+            title: "Add canonical URL",
+            code: `<head>
+  <link rel="canonical" href="https://yoursite.com/page">
+</head>
+
+<!-- Always use the full, absolute URL -->
+<!-- Point all variations to the same canonical -->`,
+            language: "html",
+            note: "Self-referencing canonicals are fine and recommended.",
+          }
+        : undefined,
+    },
+    {
+      id: "robots-txt",
+      name: "robots.txt",
+      description: "A robots.txt file tells search engines which parts of your site to crawl.",
+      passed: robotsResult.exists && robotsResult.valid,
+      severity: "info",
+      detail: robotsResult.exists && robotsResult.valid
+        ? "Found a valid robots.txt file guiding search engine crawlers."
+        : !robotsResult.exists
+          ? "No robots.txt found at /robots.txt. While not required, it helps search engines understand your site structure and can point them to your sitemap."
+          : "robots.txt exists but may not be valid — couldn't find standard directives like User-agent, Allow, or Disallow.",
+      fix: !robotsResult.exists || !robotsResult.valid
+        ? {
+            title: "Create robots.txt",
+            code: `# /robots.txt
+User-agent: *
+Allow: /
+
+# Block admin or private areas
+Disallow: /admin/
+Disallow: /private/
+
+# Point to sitemap
+Sitemap: https://yoursite.com/sitemap.xml`,
+            language: "text",
+            note: "Place this file at the root of your domain. Don't block CSS/JS files — search engines need them to render pages.",
+          }
+        : undefined,
+    },
+    {
+      id: "sitemap",
+      name: "XML sitemap",
+      description: "A sitemap helps search engines discover all your pages, especially new or deep ones.",
+      passed: sitemapResult.exists,
+      severity: "info",
+      detail: sitemapResult.exists
+        ? "Found a valid XML sitemap at /sitemap.xml — search engines can easily discover all your pages."
+        : "No sitemap found at /sitemap.xml. For small sites it's optional, but it helps search engines find pages that might not be well-linked internally.",
+      fix: !sitemapResult.exists
+        ? {
+            title: "Create sitemap.xml",
+            code: `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://yoursite.com/</loc>
+    <lastmod>2024-01-15</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://yoursite.com/about</loc>
+    <lastmod>2024-01-10</lastmod>
+    <priority>0.8</priority>
+  </url>
+</urlset>`,
+            language: "text",
+            note: "Most frameworks have sitemap generators. Submit your sitemap in Google Search Console for faster indexing.",
+          }
+        : undefined,
     },
   ];
 
-  const category = makeCategory("seo", "SEO", "🔍", checks);
-  return {
-    ...category,
-    ogData: {
-      title: ogTitle || title || undefined,
-      description: ogDesc || metaDesc || undefined,
-      image: ogImage || undefined,
-      url,
-      siteName: ogSiteName || undefined,
-    },
-  };
+  return makeCategory("seo", "SEO", "🔍", checks);
 }
 
 // --- Accessibility ---
@@ -751,161 +1005,175 @@ function runAccessibilityChecks($: cheerio.CheerioAPI): Category {
     );
   });
 
-  const imgAltOk =
-    images.length === 0 ||
-    imagesWithAlt.length - emptyAlts.length >= images.length * 0.8;
-  const buttonsOk = emptyButtons.length === 0;
-  const labelsOk =
-    inputs.length === 0 || inputsWithLabels.length >= inputs.length * 0.8;
-
   const checks: Check[] = [
     {
       id: "img-alt",
-      name: "Image alt text",
-      description: "Images should have descriptive alt text for screen readers",
-      passed: imgAltOk,
+      name: "Image descriptions",
+      description: "Screen readers announce images by their alt text — without it, blind users miss the content.",
+      passed:
+        images.length === 0 ||
+        imagesWithAlt.length - emptyAlts.length >= images.length * 0.8,
       severity: "critical",
       detail:
         images.length === 0
-          ? "No images on page."
-          : `${imagesWithAlt.length}/${images.length} images have alt text. ${emptyAlts.length} have empty alt (decorative).`,
-      ...(!imgAltOk && {
-        fix: {
-          title: "Add alt text to images",
-          code: `<!-- Descriptive alt for meaningful images -->
-<img src="/photo.jpg" alt="A golden retriever playing fetch in the park">
+          ? "No images found on this page."
+          : imagesWithAlt.length - emptyAlts.length >= images.length * 0.8
+            ? `${imagesWithAlt.length} of ${images.length} images have alt text (${emptyAlts.length} are marked decorative with empty alt). Screen reader users can understand your content.`
+            : `Only ${imagesWithAlt.length - emptyAlts.length} of ${images.length} images have descriptive alt text. Blind users will hear 'image' or the filename instead of understanding what's shown.`,
+      fix: images.length > 0 && imagesWithAlt.length - emptyAlts.length < images.length * 0.8
+        ? {
+            title: "Add alt text to images",
+            code: `<!-- Describe what's in the image -->
+<img src="team.jpg" alt="Five team members standing in front of office building">
 
-<!-- Empty alt for decorative images -->
-<img src="/divider.svg" alt="">
+<!-- For decorative images, use empty alt (not missing!) -->
+<img src="decorative-border.png" alt="">
 
-<!-- Role=presentation for complex decorative elements -->
-<img src="/pattern.png" alt="" role="presentation">`,
-          language: "html" as const,
-          note: "Describe what the image shows, not 'image of...' Be concise but informative.",
-        },
-      }),
+<!-- Don't say "Image of" or "Picture of" — screen readers already announce it's an image -->`,
+            language: "html",
+            note: "Good alt text describes the content or function, not just 'logo' or 'photo'.",
+          }
+        : undefined,
     },
     {
       id: "lang",
-      name: "Language attribute",
-      description: "HTML lang attribute helps screen readers pronounce content correctly",
+      name: "Language declaration",
+      description: "Without a language set, screen readers might pronounce your content with the wrong accent.",
       passed: !!lang,
       severity: "warning",
       detail: lang
-        ? `Language: ${lang}`
-        : "No lang attribute on <html>. Screen readers won't know what language to use.",
-      ...(!lang && {
-        fix: {
-          title: "Add language attribute",
-          code: `<html lang="en">`,
-          language: "html" as const,
-          note: "Use ISO 639-1 codes: en, es, fr, de, zh, ja, etc.",
-        },
-      }),
+        ? `Page language is set to "${lang}" — screen readers know how to pronounce the content.`
+        : "No language attribute on <html>. A screen reader might try to read English text with French pronunciation (or vice versa), making it incomprehensible.",
+      fix: !lang
+        ? {
+            title: "Add language attribute",
+            code: `<!DOCTYPE html>
+<html lang="en">
+
+<!-- Use the correct language code: -->
+<!-- English: en, Spanish: es, French: fr, German: de, etc. -->
+
+<!-- For specific variants: -->
+<html lang="en-US">  <!-- American English -->
+<html lang="en-GB">  <!-- British English -->`,
+            language: "html",
+            note: "Set the language on the <html> tag. Change it on specific elements if needed.",
+          }
+        : undefined,
     },
     {
       id: "heading-hierarchy",
-      name: "Heading hierarchy",
-      description: "Headings should follow a logical order (H1 → H2 → H3, no skipping)",
+      name: "Heading order",
+      description: "Skipping heading levels (H1 → H3) confuses screen reader users navigating by headings.",
       passed: !hasSkippedLevel,
       severity: "warning",
-      detail: hasSkippedLevel
-        ? "Heading levels are skipped (e.g., H1 → H3). This confuses screen reader navigation."
-        : `${headings.length} headings in logical order.`,
-      ...(hasSkippedLevel && {
-        fix: {
-          title: "Fix heading hierarchy",
-          code: `<!-- ✗ Wrong: Skipping levels -->
-<h1>Page Title</h1>
-<h3>Subsection</h3>  <!-- Should be h2 -->
+      detail: !hasSkippedLevel
+        ? `Found ${headings.length} headings in proper order — screen reader users can navigate your content structure.`
+        : "Heading levels are skipped (e.g., jumping from H1 to H3). Screen reader users rely on headings to navigate — skipped levels make the structure confusing.",
+      fix: hasSkippedLevel
+        ? {
+            title: "Fix heading hierarchy",
+            code: `<!-- Headings should follow a logical order -->
+<h1>Main Page Title</h1>
+  <h2>Major Section</h2>
+    <h3>Subsection</h3>
+    <h3>Another Subsection</h3>
+  <h2>Another Major Section</h2>
 
-<!-- ✓ Correct: Sequential levels -->
-<h1>Page Title</h1>
-<h2>Section</h2>
-<h3>Subsection</h3>
-<h2>Another Section</h2>`,
-          language: "html" as const,
-          note: "Headings create an outline. Never skip levels (H1→H3). You can skip back (H3→H2).",
-        },
-      }),
+<!-- Don't skip levels! -->
+<!-- Bad: H1 → H3 (skipped H2) -->
+<!-- Good: H1 → H2 → H3 -->`,
+            language: "html",
+            note: "Use CSS to style headings — don't pick a heading level based on how it looks.",
+          }
+        : undefined,
     },
     {
       id: "viewport",
-      name: "Viewport meta tag",
-      description: "Viewport meta ensures the page is readable on mobile devices",
+      name: "Mobile viewport",
+      description: "Without the viewport meta tag, your page appears tiny on phones with users having to zoom.",
       passed: !!viewport,
       severity: "critical",
       detail: viewport
-        ? `Viewport: ${viewport}`
-        : "No viewport meta tag. Your page won't render properly on mobile devices.",
-      ...(!viewport && {
-        fix: {
-          title: "Add viewport meta tag",
-          code: `<meta name="viewport" content="width=device-width, initial-scale=1">`,
-          language: "html" as const,
-          note: "Add this in your <head>. Avoid user-scalable=no as it harms accessibility.",
-        },
-      }),
+        ? `Viewport configured: ${viewport} — page will scale properly on mobile devices.`
+        : "No viewport meta tag. On mobile, your page will render at desktop width (~980px) then shrink to fit, making text unreadably small.",
+      fix: !viewport
+        ? {
+            title: "Add viewport meta tag",
+            code: `<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+
+<!-- Don't disable zooming! Users with low vision need to zoom: -->
+<!-- Bad: user-scalable=no, maximum-scale=1 -->`,
+            language: "html",
+            note: "This is essential for responsive design and accessibility.",
+          }
+        : undefined,
     },
     {
       id: "button-labels",
       name: "Button labels",
-      description: "Buttons should have visible text or aria-label",
-      passed: buttonsOk,
+      description: "Buttons without text or labels are unusable for screen reader users.",
+      passed: emptyButtons.length === 0,
       severity: "warning",
-      detail: buttonsOk
-        ? `All ${buttons.length} buttons have labels.`
-        : `${emptyButtons.length} button(s) have no text or aria-label. Screen reader users won't know what they do.`,
-      ...(!buttonsOk && {
-        fix: {
-          title: "Add labels to buttons",
-          code: `<!-- Text content is best -->
-<button>Submit Form</button>
+      detail:
+        emptyButtons.length === 0
+          ? `All ${buttons.length} buttons have visible text or aria-label — screen reader users know what they do.`
+          : `${emptyButtons.length} button(s) have no text or aria-label. A screen reader will just say 'button' with no indication of what it does.`,
+      fix: emptyButtons.length > 0
+        ? {
+            title: "Add labels to buttons",
+            code: `<!-- Option 1: Visible text (best) -->
+<button>Save Changes</button>
 
-<!-- For icon-only buttons, use aria-label -->
-<button aria-label="Close menu">
+<!-- Option 2: aria-label for icon buttons -->
+<button aria-label="Close dialog">
   <svg><!-- X icon --></svg>
 </button>
 
-<!-- Or use visually-hidden text -->
+<!-- Option 3: Visually hidden text -->
 <button>
-  <svg><!-- Search icon --></svg>
-  <span class="sr-only">Search</span>
+  <svg><!-- Icon --></svg>
+  <span class="sr-only">Delete item</span>
 </button>`,
-          language: "html" as const,
-          note: "Icon-only buttons must have aria-label or visually hidden text.",
-        },
-      }),
+            language: "html",
+            note: "Visible text is always preferred. Use aria-label only when icons are self-explanatory.",
+          }
+        : undefined,
     },
     {
       id: "form-labels",
       name: "Form input labels",
-      description: "Form inputs should have associated labels",
-      passed: labelsOk,
+      description: "Form fields without labels leave screen reader users guessing what to enter.",
+      passed:
+        inputs.length === 0 || inputsWithLabels.length >= inputs.length * 0.8,
       severity: "warning",
       detail:
         inputs.length === 0
-          ? "No form inputs on page."
-          : `${inputsWithLabels.length}/${inputs.length} inputs have labels.`,
-      ...(!labelsOk && {
-        fix: {
-          title: "Associate labels with form inputs",
-          code: `<!-- Method 1: for/id association (recommended) -->
+          ? "No form inputs found on this page."
+          : inputsWithLabels.length >= inputs.length * 0.8
+            ? `${inputsWithLabels.length} of ${inputs.length} form inputs have proper labels.`
+            : `Only ${inputsWithLabels.length} of ${inputs.length} inputs have labels. Screen reader users won't know what information to enter.`,
+      fix: inputs.length > 0 && inputsWithLabels.length < inputs.length * 0.8
+        ? {
+            title: "Add labels to form inputs",
+            code: `<!-- Option 1: Explicit label with for attribute (best) -->
 <label for="email">Email address</label>
 <input type="email" id="email" name="email">
 
-<!-- Method 2: Wrapping label -->
+<!-- Option 2: Wrap input in label -->
 <label>
   Email address
   <input type="email" name="email">
 </label>
 
-<!-- Method 3: aria-label for visual labels elsewhere -->
+<!-- Option 3: aria-label (use when visual label isn't possible) -->
 <input type="search" aria-label="Search products">`,
-          language: "html" as const,
-          note: "Every input needs a label. Placeholder text is NOT a label.",
-        },
-      }),
+            language: "html",
+            note: "Placeholder text is not a substitute for labels — it disappears when typing.",
+          }
+        : undefined,
     },
   ];
 
@@ -940,75 +1208,70 @@ async function runErrorHandlingChecksAsync(url: string): Promise<Category> {
 
     checks.push({
       id: "404-status",
-      name: "404 status code",
-      description: "Missing pages should return HTTP 404, not 200",
+      name: "404 for missing pages",
+      description: "When someone visits a page that doesn't exist, your server should say so — not pretend everything's fine.",
       passed: has404,
       severity: "critical",
       detail: has404
-        ? "Correctly returns 404 for missing pages."
-        : `Returns ${res.status} for missing pages. This confuses search engines and users.`,
-      ...(!has404 && {
-        fix: {
-          title: "Return proper 404 status codes",
-          code: `// Next.js: pages/404.js or app/not-found.tsx
-export default function NotFound() {
-  return <h1>Page not found</h1>;
+        ? "Your server correctly returns a 404 status code for missing pages."
+        : `Your server returns ${res.status} for missing pages. Returning 200 (OK) for non-existent pages creates 'soft 404s' that confuse search engines and waste their crawl budget.`,
+      fix: !has404
+        ? {
+            title: "Return proper 404 status",
+            code: `// Express.js
+app.use((req, res) => {
+  res.status(404).send('Page not found');
+});
+
+// Next.js - create pages/404.js
+export default function Custom404() {
+  return <h1>Page not found</h1>
 }
 
-// Vercel: vercel.json (for static sites)
-{
-  "routes": [
-    { "handle": "filesystem" },
-    { "src": "/(.*)", "status": 404, "dest": "/404.html" }
-  ]
-}`,
-          language: "json" as const,
-          note: "Make sure your server returns HTTP 404, not 200 with error content.",
-        },
-      }),
+// The key is the HTTP status code, not just the message`,
+            language: "text",
+            note: "The HTTP status must be 404. Don't redirect missing pages to your homepage.",
+          }
+        : undefined,
     });
 
     checks.push({
       id: "custom-404",
-      name: "Custom 404 page",
-      description: "A helpful 404 page guides lost users back to your site",
+      name: "Helpful 404 page",
+      description: "A friendly error page helps lost visitors find their way instead of bouncing.",
       passed: hasCustom404,
       severity: "info",
       detail: hasCustom404
-        ? "Has a custom 404 page."
-        : 'Using a default or minimal error page. A friendly "page not found" helps users find what they\'re looking for.',
-      ...(!hasCustom404 && {
-        fix: {
-          title: "Create a custom 404 page",
-          code: `<!-- 404.html - Make it helpful! -->
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <title>Page not found | Your Site</title>
-</head>
-<body>
-  <h1>Page not found</h1>
-  <p>Sorry, we couldn't find what you're looking for.</p>
-  <ul>
-    <li><a href="/">Go to homepage</a></li>
-    <li><a href="/search">Search our site</a></li>
-    <li><a href="/contact">Contact us</a></li>
-  </ul>
-</body>
-</html>`,
-          language: "html" as const,
-          note: "Include navigation, search, or popular links to help users find what they need.",
-        },
-      }),
+        ? "You have a custom 404 page that helps lost visitors."
+        : "Using a default error page. A friendly 'page not found' page with navigation options, search, or popular links helps visitors recover instead of leaving.",
+      fix: !hasCustom404
+        ? {
+            title: "Create a helpful 404 page",
+            code: `<!-- Include on your 404 page: -->
+<h1>Page not found</h1>
+<p>Sorry, we couldn't find that page. It might have been moved or deleted.</p>
+
+<h2>Try these instead:</h2>
+<ul>
+  <li><a href="/">Go to homepage</a></li>
+  <li><a href="/search">Search our site</a></li>
+  <li><a href="/contact">Contact us</a></li>
+</ul>
+
+<!-- Or add a search box -->`,
+            language: "html",
+            note: "Make sure the 404 page matches your site's design so users know they're still on your site.",
+          }
+        : undefined,
     });
   } catch {
     checks.push({
       id: "404-check",
       name: "Error page check",
-      description: "Could not check error pages",
+      description: "We couldn't check your error pages.",
       passed: false,
       severity: "info",
-      detail: "Couldn't reach the 404 test URL. The server may block unusual paths.",
+      detail: "Couldn't reach the 404 test URL. Your server may block unusual paths or have strict rate limiting.",
     });
   }
 
@@ -1022,10 +1285,11 @@ function runBestPracticesChecks(
   $: cheerio.CheerioAPI,
   url: string
 ): Category {
-  const hasFavicon =
+  const favicon =
     $('link[rel="icon"]').length > 0 ||
-    $('link[rel="shortcut icon"]').length > 0;
-  const hasCharset = $('meta[charset]').length > 0 || html_has_charset($);
+    $('link[rel="shortcut icon"]').length > 0 ||
+    $('link[rel*="icon"]').length > 0;
+  const charset = $('meta[charset]').length > 0 || html_has_charset($);
   const isHttps = url.startsWith("https://");
   const hasDoctype =
     $.html().trim().toLowerCase().startsWith("<!doctype html");
@@ -1042,133 +1306,132 @@ function runBestPracticesChecks(
     {
       id: "favicon",
       name: "Favicon",
-      description: "A favicon helps users identify your site in browser tabs",
-      passed: hasFavicon,
+      description: "The little icon in browser tabs helps users identify your site among dozens of open tabs.",
+      passed: favicon,
       severity: "info",
-      detail: hasFavicon
-        ? "Favicon found."
-        : "No favicon link tag. Your site shows a generic icon in browser tabs.",
-      ...(!hasFavicon && {
-        fix: {
-          title: "Add favicon",
-          code: `<!-- Add in <head> - multiple sizes for different contexts -->
-<link rel="icon" href="/favicon.ico" sizes="32x32">
-<link rel="icon" href="/icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-
-<!-- Or just the basics -->
-<link rel="icon" href="/favicon.ico">`,
-          language: "html" as const,
-          note: "Create a 32x32 favicon.ico. For modern browsers, SVG works too.",
-        },
-      }),
+      detail: favicon
+        ? "Favicon found — your site has its own identity in browser tabs and bookmarks."
+        : "No favicon detected. Your site shows a generic icon, making it harder to spot in browser tabs and bookmarks.",
+      fix: !favicon
+        ? {
+            title: "Add a favicon",
+            code: `<head>
+  <!-- Basic favicon -->
+  <link rel="icon" href="/favicon.ico">
+  
+  <!-- Modern formats for better quality -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+  
+  <!-- Apple touch icon for iOS -->
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+</head>`,
+            language: "html",
+            note: "Use realfavicongenerator.net to create all the variants you need.",
+          }
+        : undefined,
     },
     {
       id: "charset",
       name: "Character encoding",
-      description: "Declaring UTF-8 charset prevents rendering issues",
-      passed: hasCharset,
+      description: "Tell browsers how to read your text — without this, special characters may appear as garbage.",
+      passed: charset,
       severity: "warning",
-      detail: hasCharset
-        ? "Character encoding declared."
-        : "No charset declaration. Special characters might display incorrectly.",
-      ...(!hasCharset && {
-        fix: {
-          title: "Add charset declaration",
-          code: `<!-- Add as first item in <head> -->
-<meta charset="utf-8">`,
-          language: "html" as const,
-          note: "Must be within the first 1024 bytes of the document.",
-        },
-      }),
+      detail: charset
+        ? "Character encoding is declared — special characters, emojis, and international text will display correctly."
+        : "No character encoding declared. Characters like é, ñ, €, and 中文 might display as garbled symbols depending on the browser's guess.",
+      fix: !charset
+        ? {
+            title: "Add charset declaration",
+            code: `<head>
+  <!-- Must be in the first 1024 bytes of the document -->
+  <meta charset="UTF-8">
+  
+  <!-- Rest of head content... -->
+</head>`,
+            language: "html",
+            note: "UTF-8 handles virtually all characters. Always declare it as the first item in <head>.",
+          }
+        : undefined,
     },
     {
       id: "doctype",
       name: "HTML doctype",
-      description: "DOCTYPE ensures consistent rendering across browsers",
+      description: "The doctype declaration prevents browsers from rendering your page in outdated 'quirks mode'.",
       passed: hasDoctype,
       severity: "info",
       detail: hasDoctype
-        ? "HTML5 doctype present."
-        : "No DOCTYPE declaration. Browser may render in quirks mode.",
-      ...(!hasDoctype && {
-        fix: {
-          title: "Add HTML5 doctype",
-          code: `<!DOCTYPE html>
+        ? "HTML5 doctype present — browsers will render your page in standards mode."
+        : "No DOCTYPE declaration. Without it, browsers enter 'quirks mode' where CSS and layout work differently (and inconsistently across browsers).",
+      fix: !hasDoctype
+        ? {
+            title: "Add DOCTYPE",
+            code: `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <!-- your head content -->
-</head>
-<body>
-  <!-- your body content -->
-</body>
-</html>`,
-          language: "html" as const,
-          note: "Must be the very first line of your HTML file. No whitespace before it.",
-        },
-      }),
+  <!-- Must be the very first thing in the document -->
+  <!-- No whitespace or comments before it -->`,
+            language: "html",
+            note: "The HTML5 doctype is simple and works for all HTML versions.",
+          }
+        : undefined,
     },
     {
       id: "https-redirect",
-      name: "HTTPS",
-      description: "Site should be served over HTTPS",
+      name: "Secure connection",
+      description: "Serve your site over HTTPS to protect visitor privacy and get better search rankings.",
       passed: isHttps,
       severity: "critical",
       detail: isHttps
-        ? "Site served over HTTPS."
-        : "Not using HTTPS. User data is sent in plain text.",
-      ...(!isHttps && {
-        fix: {
-          title: "Enable HTTPS",
-          code: `# Most platforms provide free SSL:
-# - Vercel: Automatic on all deployments
-# - Netlify: Enable in Domain settings
-# - Cloudflare: Free Universal SSL
+        ? "Your site uses HTTPS — connections are encrypted and secure."
+        : "Your site isn't using HTTPS. Visitors' data travels in plain text, browsers show security warnings, and Google ranks HTTPS sites higher.",
+      fix: !isHttps
+        ? {
+            title: "Enable HTTPS",
+            code: `# Get a free SSL certificate from Let's Encrypt:
+# Most hosts offer one-click setup
 
-# After enabling, redirect HTTP to HTTPS
-# vercel.json:
-{
-  "redirects": [
-    {
-      "source": "/(.*)",
-      "has": [{ "type": "header", "key": "x-forwarded-proto", "value": "http" }],
-      "destination": "https://yourdomain.com/$1",
-      "permanent": true
-    }
-  ]
+# Force HTTPS redirect in .htaccess (Apache):
+RewriteEngine On
+RewriteCond %{HTTPS} off
+RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# Nginx:
+server {
+    listen 80;
+    return 301 https://$host$request_uri;
 }`,
-          language: "json" as const,
-          note: "Get a free certificate from Let's Encrypt if your host doesn't provide one.",
-        },
-      }),
+            language: "htaccess",
+            note: "Most modern hosts like Vercel, Netlify, and Cloudflare provide free HTTPS automatically.",
+          }
+        : undefined,
     },
     {
       id: "modern-js",
       name: "Modern JavaScript",
-      description: "Using ES modules indicates a modern build setup",
+      description: "Using ES modules indicates a modern build setup that's likely better optimized.",
       passed: modernJs,
       severity: "info",
       detail: modernJs
-        ? "Uses ES modules (modern build)."
-        : "No ES module scripts detected. Consider a modern build tool for better performance.",
-      ...(!modernJs && {
-        fix: {
-          title: "Use ES modules",
-          code: `<!-- Modern: type="module" enables ES modules -->
-<script type="module" src="/app.js"></script>
+        ? "Your site uses ES modules — you're likely using a modern build tool that optimizes code."
+        : "No ES modules detected. Modern build tools (Vite, webpack, etc.) produce smaller, faster bundles with features like tree-shaking.",
+      fix: !modernJs
+        ? {
+            title: "Use modern JavaScript",
+            code: `<!-- Modern ES module syntax -->
+<script type="module" src="/js/app.js"></script>
 
-<!-- Your app.js can use import/export -->
-import { something } from './utils.js';
+<!-- Build tools like Vite do this automatically: -->
+npm create vite@latest my-app
 
-<!-- Build tools that output ES modules: -->
-<!-- - Vite (recommended) -->
-<!-- - esbuild -->
-<!-- - Rollup -->
-<!-- - Webpack 5+ with output.module: true -->`,
-          language: "html" as const,
-          note: "ES modules enable tree shaking, better caching, and modern syntax.",
-        },
-      }),
+<!-- Benefits: -->
+<!-- - Tree-shaking (removes unused code) -->
+<!-- - Better code splitting -->
+<!-- - Smaller bundles -->`,
+            language: "html",
+            note: "If you're building a static site, consider a simple setup with Vite or Parcel.",
+          }
+        : undefined,
     },
   ];
 

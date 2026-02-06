@@ -1,13 +1,5 @@
 export type Grade = "A" | "B" | "C" | "D" | "F";
 
-export interface OGData {
-  title?: string;
-  description?: string;
-  image?: string;
-  url?: string;
-  siteName?: string;
-}
-
 export interface ScanResult {
   url: string;
   scannedAt: string;
@@ -15,7 +7,15 @@ export interface ScanResult {
   overallGrade: Grade;
   categories: Category[];
   scanTimeMs: number;
+  jsFrameworkDetected?: boolean;
+  jsFrameworkNotice?: string;
   ogData?: OGData;
+}
+
+export interface OGData {
+  title?: string;
+  description?: string;
+  image?: string;
 }
 
 export interface Category {
@@ -40,6 +40,6 @@ export interface Check {
 export interface FixSnippet {
   title: string;
   code: string;
-  language: "html" | "json" | "htaccess" | "text";
+  language: "html" | "json" | "htaccess" | "text" | "nginx";
   note?: string;
 }

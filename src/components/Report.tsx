@@ -1,4 +1,4 @@
-import React, { useState, useRef, forwardRef } from "react";
+import { useState, useMemo } from "react";
 import {
   Shield,
   Zap,
@@ -11,12 +11,11 @@ import {
   ArrowLeft,
   ChevronRight,
   Link,
-  RefreshCw,
-  HelpCircle,
-  Download,
+  Copy,
+  CheckCircle,
+  AlertTriangle,
 } from "lucide-react";
-import type { ScanResult, Category, Check as CheckType, Grade } from "../types";
-import { BadgeEmbed } from "./BadgeEmbed";
+import type { ScanResult, Category, Check as CheckType, Grade, OGData } from "../types";
 import styles from "./Report.module.css";
 
 const CATEGORY_ICONS: Record<string, React.ElementType> = {
@@ -31,9 +30,6 @@ const CATEGORY_ICONS: Record<string, React.ElementType> = {
 interface ReportProps {
   result: ScanResult;
   onReset: () => void;
-  onRescan?: () => Promise<ScanResult | null>;
-  previousResult?: ScanResult | null;
-  isRescanning?: boolean;
 }
 
 function gradeColor(grade: Grade) {
@@ -69,11 +65,12 @@ function gradeVerdict(grade: Grade): string {
   return map[grade];
 }
 
-export function Report({ result, onReset, onRescan, previousResult, isRescanning }: ReportProps) {
+type ViewMode = "priority" | "category";
+
+export function Report({ result, onReset }: ReportProps) {
   const domain = result.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
   const [copied, setCopied] = useState(false);
-  const [howWeScoreOpen, setHowWeScoreOpen] = useState(false);
-  const categoryRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [viewMode, setViewMode] = useState<ViewMode>("priority");
 
   async function handleCopyLink() {
     try {
@@ -93,16 +90,45 @@ export function Report({ result, onReset, onRescan, previousResult, isRescanning
     }
   }
 
-  function scrollToCategory(categoryId: string) {
-    const el = categoryRefs.current[categoryId];
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
+  // Collect all checks with category info for priority view
+  const allChecks = useMemo(() => {
+    const checks: Array<{
+      check: CheckType;
+      categoryId: string;
+      categoryName: string;
+      categoryEmoji: string;
+    }> = [];
+    for (const cat of result.categories) {
+      for (const check of cat.checks) {
+        checks.push({
+          check,
+          categoryId: cat.id,
+          categoryName: cat.name,
+          categoryEmoji: cat.emoji,
+        });
+      }
     }
-  }
+    return checks;
+  }, [result.categories]);
 
-  // Calculate score change for re-scan comparison
-  const scoreChange = previousResult ? result.overallScore - previousResult.overallScore : null;
-  const gradeChanged = previousResult && result.overallGrade !== previousResult.overallGrade;
+  // Group checks by severity for priority view
+  const priorityGroups = useMemo(() => {
+    const failed = allChecks.filter((c) => !c.check.passed);
+    const passed = allChecks.filter((c) => c.check.passed);
+    
+    return {
+      critical: failed.filter((c) => c.check.severity === "critical"),
+      warning: failed.filter((c) => c.check.severity === "warning"),
+      info: failed.filter((c) => c.check.severity === "info"),
+      passed,
+    };
+  }, [allChecks]);
+
+  // Check if OG tags are missing
+  const ogTagsCheck = result.categories
+    .find((c) => c.id === "seo")
+    ?.checks.find((c) => c.id === "og-tags");
+  const showOgPreview = ogTagsCheck && !ogTagsCheck.passed;
 
   return (
     <div className={styles.report}>
@@ -112,23 +138,9 @@ export function Report({ result, onReset, onRescan, previousResult, isRescanning
           <ArrowLeft size={14} strokeWidth={2} /> new scan
         </button>
         <div className={styles.headerRight}>
-          {onRescan && (
-            <button 
-              className={`${styles.rescanBtn} ${isRescanning ? styles.rescanning : ""}`}
-              onClick={onRescan}
-              disabled={isRescanning}
-            >
-              <RefreshCw size={14} strokeWidth={2} className={isRescanning ? styles.spinning : ""} />
-              {isRescanning ? "scanning..." : "re-scan"}
-            </button>
-          )}
           <button className={styles.shareBtn} onClick={handleCopyLink}>
             <Link size={14} strokeWidth={2} />
             {copied ? "copied!" : "share"}
-          </button>
-          <button className={styles.downloadBtn} onClick={() => window.print()}>
-            <Download size={14} strokeWidth={2} />
-            <span className={styles.downloadLabel}>PDF</span>
           </button>
           <span className={styles.meta}>
             {(result.scanTimeMs / 1000).toFixed(1)}s
@@ -165,23 +177,6 @@ export function Report({ result, onReset, onRescan, previousResult, isRescanning
           </div>
         </div>
 
-        {/* Re-scan comparison */}
-        {previousResult && (
-          <div className={styles.comparison}>
-            {scoreChange !== null && scoreChange !== 0 ? (
-              <span className={scoreChange > 0 ? styles.improved : styles.declined}>
-                Score {scoreChange > 0 ? "improved" : "declined"}: {previousResult.overallScore} → {result.overallScore} ({scoreChange > 0 ? "+" : ""}{scoreChange})
-              </span>
-            ) : gradeChanged ? (
-              <span className={styles.gradeChange}>
-                Grade changed: {previousResult.overallGrade} → {result.overallGrade}
-              </span>
-            ) : (
-              <span className={styles.noChange}>No change</span>
-            )}
-          </div>
-        )}
-
         {/* Score bar */}
         <div className={styles.scoreBar}>
           <div
@@ -196,82 +191,99 @@ export function Report({ result, onReset, onRescan, previousResult, isRescanning
         {/* Category summary strip */}
         <div className={styles.summaryStrip}>
           {result.categories.map((cat) => (
-            <button 
-              key={cat.id} 
-              className={styles.summaryItem}
-              onClick={() => scrollToCategory(cat.id)}
-              style={{ "--summary-color": gradeColor(cat.grade) } as React.CSSProperties}
-            >
-              <span className={styles.summaryDot} />
-              <span className={styles.summaryGrade}>
+            <div key={cat.id} className={styles.summaryItem}>
+              <span className={styles.summaryGrade} style={{ color: gradeColor(cat.grade) }}>
                 {cat.grade}
               </span>
               <span className={styles.summaryLabel}>{cat.name}</span>
-            </button>
+            </div>
           ))}
         </div>
+      </section>
 
-        {/* How we score - collapsible */}
-        <div className={styles.howWeScore}>
-          <button 
-            className={styles.howWeScoreToggle}
-            onClick={() => setHowWeScoreOpen(!howWeScoreOpen)}
-          >
-            <HelpCircle size={14} strokeWidth={2} />
-            <span>How we score</span>
-            <ChevronRight 
-              size={14} 
-              strokeWidth={2} 
-              className={`${styles.howWeScoreArrow} ${howWeScoreOpen ? styles.howWeScoreArrowOpen : ""}`} 
-            />
-          </button>
-          {howWeScoreOpen && (
-            <div className={styles.howWeScoreContent}>
-              <div className={styles.howWeScoreSection}>
-                <h4>Severity levels</h4>
-                <ul>
-                  <li><span className={`${styles.severityBadge} ${styles.critical}`}>critical</span> Must fix — security risks or major issues</li>
-                  <li><span className={`${styles.severityBadge} ${styles.warning}`}>warning</span> Should fix — impacts user experience</li>
-                  <li><span className={`${styles.severityBadge} ${styles.info}`}>info</span> Nice to have — best practice suggestions</li>
-                </ul>
-              </div>
-              <div className={styles.howWeScoreSection}>
-                <h4>Category scores</h4>
-                <p>Each category scores 0-100 based on checks passed, weighted by severity. Critical issues have the biggest impact.</p>
-              </div>
-              <div className={styles.howWeScoreSection}>
-                <h4>Grade thresholds</h4>
-                <p>
-                  <span className={styles.gradeKey} style={{ color: gradeColor("A") }}>A</span> 90+ &nbsp;
-                  <span className={styles.gradeKey} style={{ color: gradeColor("B") }}>B</span> 80-89 &nbsp;
-                  <span className={styles.gradeKey} style={{ color: gradeColor("C") }}>C</span> 70-79 &nbsp;
-                  <span className={styles.gradeKey} style={{ color: gradeColor("D") }}>D</span> 60-69 &nbsp;
-                  <span className={styles.gradeKey} style={{ color: gradeColor("F") }}>F</span> &lt;60
-                </p>
-              </div>
-              <div className={styles.howWeScoreSection}>
-                <h4>Overall score</h4>
-                <p>Weighted average of all category scores.</p>
-              </div>
-            </div>
-          )}
+      {/* JS Framework Notice */}
+      {result.jsFrameworkDetected && result.jsFrameworkNotice && (
+        <div className={styles.jsFrameworkNotice}>
+          <AlertTriangle size={18} strokeWidth={2} />
+          <div className={styles.jsFrameworkNoticeText}>
+            <strong>Client-side rendering detected</strong>
+            <p>{result.jsFrameworkNotice}</p>
+          </div>
         </div>
-      </section>
+      )}
 
-      {/* Categories */}
-      <section className={styles.categories}>
-        {result.categories.map((category, i) => (
-          <CategorySection
-            key={category.id}
-            category={category}
-            index={i}
-            ref={(el) => { categoryRefs.current[category.id] = el; }}
-          />
-        ))}
-      </section>
+      {/* OG Preview (if tags missing) */}
+      {showOgPreview && (
+        <SocialCardPreview 
+          ogData={result.ogData} 
+          url={result.url} 
+        />
+      )}
 
-      {/* Badge embed */}
-      <BadgeEmbed url={result.url} grade={result.overallGrade} />
+      {/* View toggle */}
+      <div className={styles.viewToggle}>
+        <button
+          className={`${styles.toggleBtn} ${viewMode === "priority" ? styles.toggleActive : ""}`}
+          onClick={() => setViewMode("priority")}
+        >
+          Priority
+        </button>
+        <button
+          className={`${styles.toggleBtn} ${viewMode === "category" ? styles.toggleActive : ""}`}
+          onClick={() => setViewMode("category")}
+        >
+          Category
+        </button>
+      </div>
+
+      {/* Results */}
+      {viewMode === "category" ? (
+        <section className={styles.categories}>
+          {result.categories.map((category, i) => (
+            <CategorySection
+              key={category.id}
+              category={category}
+              index={i}
+            />
+          ))}
+        </section>
+      ) : (
+        <section className={styles.priorityView}>
+          {priorityGroups.critical.length > 0 && (
+            <PriorityGroup
+              title="Blockers"
+              emoji="🔴"
+              severity="critical"
+              items={priorityGroups.critical}
+            />
+          )}
+          {priorityGroups.warning.length > 0 && (
+            <PriorityGroup
+              title="Should fix"
+              emoji="🟡"
+              severity="warning"
+              items={priorityGroups.warning}
+            />
+          )}
+          {priorityGroups.info.length > 0 && (
+            <PriorityGroup
+              title="Nice to have"
+              emoji="🔵"
+              severity="info"
+              items={priorityGroups.info}
+            />
+          )}
+          {priorityGroups.passed.length > 0 && (
+            <PriorityGroup
+              title="Passing"
+              emoji="✅"
+              severity="passed"
+              items={priorityGroups.passed}
+              collapsed
+            />
+          )}
+        </section>
+      )}
 
       <footer className={styles.footer}>
         <p>
@@ -282,10 +294,188 @@ export function Report({ result, onReset, onRescan, previousResult, isRescanning
   );
 }
 
-const CategorySection = forwardRef<
-  HTMLDivElement,
-  { category: Category; index: number }
->(function CategorySection({ category, index }, ref) {
+// Social Card Preview Component
+function SocialCardPreview({ ogData, url }: { ogData?: OGData; url: string }) {
+  const domain = url.replace(/^https?:\/\//, "").split("/")[0];
+  
+  return (
+    <section className={styles.ogPreview}>
+      <h3 className={styles.ogPreviewTitle}>
+        How your site looks when shared
+      </h3>
+      <p className={styles.ogPreviewSubtitle}>
+        Missing OG tags means your site won't look great on social media
+      </p>
+      
+      <div className={styles.ogCards}>
+        {/* Current (broken) state */}
+        <div className={styles.ogCard}>
+          <div className={styles.ogCardLabel}>Current</div>
+          <div className={styles.ogCardContent}>
+            <div className={styles.ogCardPlatform}>Twitter / X</div>
+            <div className={styles.ogCardMock}>
+              {ogData?.image ? (
+                <img 
+                  src={ogData.image} 
+                  alt="OG preview" 
+                  className={styles.ogCardImage}
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = "none";
+                    (e.target as HTMLImageElement).nextElementSibling?.classList.remove(styles.hidden);
+                  }}
+                />
+              ) : null}
+              <div className={`${styles.ogCardNoImage} ${ogData?.image ? styles.hidden : ""}`}>
+                <span>No preview image</span>
+              </div>
+              <div className={styles.ogCardText}>
+                <div className={styles.ogCardDomain}>{domain}</div>
+                <div className={styles.ogCardTitle}>
+                  {ogData?.title || "No title set"}
+                </div>
+                {ogData?.description ? (
+                  <div className={styles.ogCardDesc}>
+                    {ogData.description.slice(0, 100)}...
+                  </div>
+                ) : (
+                  <div className={styles.ogCardDescMissing}>
+                    No description
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* With proper tags */}
+        <div className={styles.ogCard}>
+          <div className={`${styles.ogCardLabel} ${styles.ogCardLabelGood}`}>With OG tags</div>
+          <div className={styles.ogCardContent}>
+            <div className={styles.ogCardPlatform}>Twitter / X</div>
+            <div className={`${styles.ogCardMock} ${styles.ogCardMockGood}`}>
+              <div className={styles.ogCardImageIdeal}>
+                <span>1200 × 630</span>
+                <span>og:image</span>
+              </div>
+              <div className={styles.ogCardText}>
+                <div className={styles.ogCardDomain}>{domain}</div>
+                <div className={styles.ogCardTitle}>
+                  Your compelling page title
+                </div>
+                <div className={styles.ogCardDesc}>
+                  A clear, engaging description that makes people want to click...
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// Priority group component
+function PriorityGroup({
+  title,
+  emoji,
+  severity,
+  items,
+  collapsed = false,
+}: {
+  title: string;
+  emoji: string;
+  severity: "critical" | "warning" | "info" | "passed";
+  items: Array<{
+    check: CheckType;
+    categoryId: string;
+    categoryName: string;
+    categoryEmoji: string;
+  }>;
+  collapsed?: boolean;
+}) {
+  const [open, setOpen] = useState(!collapsed);
+
+  return (
+    <div className={styles.priorityGroup} data-severity={severity}>
+      <button 
+        className={styles.priorityHeader}
+        onClick={() => setOpen(!open)}
+      >
+        <div className={styles.priorityLeft}>
+          <span className={styles.priorityEmoji}>{emoji}</span>
+          <span className={styles.priorityTitle}>{title}</span>
+          <span className={styles.priorityCount}>{items.length}</span>
+        </div>
+        <span className={`${styles.arrow} ${open ? styles.arrowOpen : ""}`}>
+          <ChevronRight size={16} strokeWidth={2} />
+        </span>
+      </button>
+
+      {open && (
+        <div className={styles.priorityList}>
+          {items.map((item) => (
+            <PriorityCheckItem
+              key={`${item.categoryId}-${item.check.id}`}
+              check={item.check}
+              categoryName={item.categoryName}
+              categoryEmoji={item.categoryEmoji}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PriorityCheckItem({
+  check,
+  categoryName,
+  categoryEmoji,
+}: {
+  check: CheckType;
+  categoryName: string;
+  categoryEmoji: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div
+      className={`${styles.check} ${check.passed ? styles.checkPass : styles.checkFail}`}
+    >
+      <div 
+        className={styles.checkRow}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className={styles.checkStatus}>
+          {check.passed ? <Check size={14} strokeWidth={2.5} /> : <X size={14} strokeWidth={2.5} />}
+        </span>
+        <span className={styles.checkName}>{check.name}</span>
+        <span className={styles.checkCategory}>
+          {categoryEmoji} {categoryName}
+        </span>
+      </div>
+      
+      {expanded && (
+        <div className={styles.checkExpanded}>
+          {check.detail && <p className={styles.detail}>{check.detail}</p>}
+          {check.fix && <FixSnippet fix={check.fix} />}
+        </div>
+      )}
+      
+      {!expanded && !check.passed && (
+        <p className={styles.desc}>{check.description}</p>
+      )}
+    </div>
+  );
+}
+
+function CategorySection({
+  category,
+  index,
+}: {
+  category: Category;
+  index: number;
+}) {
   const [open, setOpen] = useState(category.grade !== "A");
   const failed = category.checks.filter((c) => !c.passed);
   const passed = category.checks.filter((c) => c.passed);
@@ -293,7 +483,6 @@ const CategorySection = forwardRef<
 
   return (
     <div
-      ref={ref}
       className={styles.category}
       style={
         {
@@ -335,7 +524,7 @@ const CategorySection = forwardRef<
       )}
     </div>
   );
-});
+}
 
 function CheckItem({ check }: { check: CheckType }) {
   const [expanded, setExpanded] = useState(false);
@@ -343,9 +532,11 @@ function CheckItem({ check }: { check: CheckType }) {
   return (
     <div
       className={`${styles.check} ${check.passed ? styles.checkPass : styles.checkFail}`}
-      onClick={() => setExpanded(!expanded)}
     >
-      <div className={styles.checkRow}>
+      <div 
+        className={styles.checkRow}
+        onClick={() => setExpanded(!expanded)}
+      >
         <span className={styles.checkStatus}>
           {check.passed ? <Check size={14} strokeWidth={2.5} /> : <X size={14} strokeWidth={2.5} />}
         </span>
@@ -356,11 +547,70 @@ function CheckItem({ check }: { check: CheckType }) {
           </span>
         )}
       </div>
-      {expanded && check.detail ? (
-        <p className={styles.detail}>{check.detail}</p>
-      ) : !check.passed && !expanded ? (
+      
+      {expanded && (
+        <div className={styles.checkExpanded}>
+          {check.detail && <p className={styles.detail}>{check.detail}</p>}
+          {check.fix && <FixSnippet fix={check.fix} />}
+        </div>
+      )}
+      
+      {!expanded && !check.passed && (
         <p className={styles.desc}>{check.description}</p>
-      ) : null}
+      )}
+    </div>
+  );
+}
+
+// Fix Snippet Component with Copy Button
+function FixSnippet({ fix }: { fix: NonNullable<CheckType["fix"]> }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(fix.code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback
+      const textarea = document.createElement("textarea");
+      textarea.value = fix.code;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }
+
+  return (
+    <div className={styles.fixSnippet}>
+      <div className={styles.fixHeader}>
+        <span className={styles.fixTitle}>{fix.title}</span>
+        <button 
+          className={`${styles.copyBtn} ${copied ? styles.copyBtnCopied : ""}`}
+          onClick={handleCopy}
+        >
+          {copied ? (
+            <>
+              <CheckCircle size={12} strokeWidth={2} />
+              Copied!
+            </>
+          ) : (
+            <>
+              <Copy size={12} strokeWidth={2} />
+              Copy
+            </>
+          )}
+        </button>
+      </div>
+      <pre className={styles.fixCode}>
+        <code>{fix.code}</code>
+      </pre>
+      {fix.note && (
+        <p className={styles.fixNote}>💡 {fix.note}</p>
+      )}
     </div>
   );
 }
