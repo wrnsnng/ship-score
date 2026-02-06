@@ -1,5 +1,13 @@
 export type Grade = "A" | "B" | "C" | "D" | "F";
 
+export interface OGData {
+  title?: string;
+  description?: string;
+  image?: string;
+  url?: string;
+  siteName?: string;
+}
+
 export interface ScanResult {
   url: string;
   scannedAt: string;
@@ -7,6 +15,7 @@ export interface ScanResult {
   overallGrade: Grade;
   categories: Category[];
   scanTimeMs: number;
+  ogData?: OGData;
 }
 
 export interface Category {

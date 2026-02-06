@@ -177,6 +177,166 @@
   background: var(--color-text-muted);
 }
 
+/* --- Examples --- */
+
+.examples {
+  margin-top: var(--sp-10);
+  text-align: center;
+}
+
+.examplesLabel {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  opacity: 0.6;
+  margin-bottom: var(--sp-4);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.exampleCards {
+  display: flex;
+  gap: var(--sp-3);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.exampleCard {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-md);
+  color: var(--color-text-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.exampleCard:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-active);
+  color: var(--color-text);
+}
+
+.exampleCard:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.exampleName {
+  font-weight: 500;
+}
+
+.exampleDomain {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.exampleArrow {
+  opacity: 0.4;
+  transition: transform 0.15s, opacity 0.15s;
+}
+
+.exampleCard:hover:not(:disabled) .exampleArrow {
+  opacity: 0.8;
+  transform: translateX(2px);
+}
+
+/* --- Checklist Section --- */
+
+.checklistSection {
+  margin-top: var(--sp-8);
+  text-align: center;
+}
+
+.checklistToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  opacity: 0.6;
+}
+
+.checklistToggle:hover {
+  opacity: 1;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+}
+
+.checklist {
+  margin-top: var(--sp-5);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--sp-4);
+  text-align: left;
+  max-width: 700px;
+  margin-left: auto;
+  margin-right: auto;
+  padding: var(--sp-5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-lg);
+}
+
+.checklistCategory {
+  padding: var(--sp-3);
+}
+
+.checklistCategoryHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--color-text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  margin-bottom: var(--sp-3);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.checklistCount {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  margin-left: auto;
+}
+
+.checklistItems {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.checklistItems li {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+  padding-left: var(--sp-3);
+  position: relative;
+}
+
+.checklistItems li::before {
+  content: "·";
+  position: absolute;
+  left: 0;
+  color: var(--color-text-muted);
+  opacity: 0.5;
+}
+
 /* --- Footer --- */
 
 .footer {
@@ -196,6 +356,12 @@
 .attribution {
   margin-top: var(--sp-4);
   font-size: 0.6875rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  color: var(--color-text-muted);
+  opacity: 0.6;
 }
 
 .attribution a {
@@ -206,4 +372,19 @@
 
 .attribution a:hover {
   color: var(--color-text);
+}
+
+.footerDot {
+  opacity: 0.4;
+}
+
+.githubLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-decoration: none !important;
+}
+
+.githubLink:hover {
+  text-decoration: underline !important;
 }

@@ -121,3 +121,21 @@ body::before {
   background: var(--color-brand-dim);
   color: var(--color-brand);
 }
+
+/* --- Print styles --- */
+
+@media print {
+  body {
+    background: white;
+    color: black;
+  }
+
+  body::before {
+    display: none;
+  }
+
+  @page {
+    margin: 1in;
+    size: letter;
+  }
+}

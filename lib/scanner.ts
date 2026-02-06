@@ -70,10 +70,13 @@ export async function scan(url: string): Promise<ScanResult> {
   const finalUrl = response.url;
 
   // Run all category checks
+  const seoResult = runSEOChecks($, finalUrl);
+  const { ogData, ...seoCategory } = seoResult;
+  
   const categories: Category[] = [
     runSecurityChecks(headers, finalUrl, html),
     runPerformanceChecks(headers, html, $),
-    runSEOChecks($, finalUrl),
+    seoCategory,
     runAccessibilityChecks($),
     runErrorHandlingChecks(url),
     runBestPracticesChecks(headers, $, finalUrl),
@@ -96,6 +99,7 @@ export async function scan(url: string): Promise<ScanResult> {
     overallGrade: scoreToGrade(overallScore),
     categories,
     scanTimeMs: Date.now() - start,
+    ogData,
   };
 }
 
