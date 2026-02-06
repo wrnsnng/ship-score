@@ -10,6 +10,7 @@ import {
   X,
   ArrowLeft,
   ChevronRight,
+  Link,
 } from "lucide-react";
 import type { ScanResult, Category, Check as CheckType, Grade } from "../types";
 import styles from "./Report.module.css";
@@ -63,6 +64,25 @@ function gradeVerdict(grade: Grade): string {
 
 export function Report({ result, onReset }: ReportProps) {
   const domain = result.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopyLink() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback for older browsers
+      const input = document.createElement("input");
+      input.value = window.location.href;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      document.body.removeChild(input);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }
 
   return (
     <div className={styles.report}>
@@ -71,9 +91,15 @@ export function Report({ result, onReset }: ReportProps) {
         <button className={styles.back} onClick={onReset}>
           <ArrowLeft size={14} strokeWidth={2} /> new scan
         </button>
-        <span className={styles.meta}>
-          {(result.scanTimeMs / 1000).toFixed(1)}s
-        </span>
+        <div className={styles.headerRight}>
+          <button className={styles.shareBtn} onClick={handleCopyLink}>
+            <Link size={14} strokeWidth={2} />
+            {copied ? "copied!" : "share"}
+          </button>
+          <span className={styles.meta}>
+            {(result.scanTimeMs / 1000).toFixed(1)}s
+          </span>
+        </div>
       </header>
 
       {/* Score hero */}

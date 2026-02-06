@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Hero } from "./components/Hero";
 import { Report } from "./components/Report";
 import type { ScanResult } from "./types";
@@ -8,6 +8,20 @@ export function App() {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const initialScanDone = useRef(false);
+
+  // Check for URL param on mount and auto-scan
+  useEffect(() => {
+    if (initialScanDone.current) return;
+    
+    const params = new URLSearchParams(window.location.search);
+    const urlParam = params.get("url");
+    
+    if (urlParam) {
+      initialScanDone.current = true;
+      handleScan(urlParam);
+    }
+  }, []);
 
   async function handleScan(url: string) {
     setLoading(true);
@@ -29,6 +43,11 @@ export function App() {
       }
 
       setResult(data);
+      
+      // Update URL with scanned domain (without reload)
+      const shareUrl = new URL(window.location.href);
+      shareUrl.searchParams.set("url", data.url);
+      window.history.replaceState({}, "", shareUrl.toString());
     } catch {
       setError("Couldn't reach the scanner. Make sure the API is running.");
     } finally {
@@ -39,6 +58,11 @@ export function App() {
   function handleReset() {
     setResult(null);
     setError(null);
+    
+    // Clear URL param
+    const url = new URL(window.location.href);
+    url.searchParams.delete("url");
+    window.history.replaceState({}, "", url.toString());
   }
 
   return (
