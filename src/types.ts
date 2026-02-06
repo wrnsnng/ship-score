@@ -25,4 +25,12 @@ export interface Check {
   passed: boolean;
   severity: "critical" | "warning" | "info";
   detail?: string;
+  fix?: FixSnippet;
+}
+
+export interface FixSnippet {
+  title: string;
+  code: string;
+  language: "html" | "json" | "htaccess" | "text";
+  note?: string;
 }
