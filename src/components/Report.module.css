@@ -19,7 +19,9 @@
   gap: var(--sp-4);
 }
 
-.shareBtn {
+.shareBtn,
+.rescanBtn,
+.downloadBtn {
   font-family: var(--font-mono);
   font-size: 0.8125rem;
   color: var(--color-text-muted);
@@ -34,10 +36,32 @@
   gap: var(--sp-2);
 }
 
-.shareBtn:hover {
+.shareBtn:hover,
+.rescanBtn:hover,
+.downloadBtn:hover {
   color: var(--color-text-secondary);
   border-color: var(--color-border-active);
   background: var(--color-surface-hover);
+}
+
+.downloadLabel {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.rescanBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.rescanning {
+  color: var(--color-brand);
+  border-color: var(--color-brand-dim);
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
 }
 
 .back {
@@ -122,6 +146,35 @@
   letter-spacing: 0.01em;
 }
 
+/* Comparison banner */
+
+.comparison {
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  animation: enter 0.3s var(--ease-out);
+}
+
+.improved {
+  color: var(--color-grade-a);
+}
+
+.declined {
+  color: var(--color-grade-f);
+}
+
+.gradeChange {
+  color: var(--color-brand);
+}
+
+.noChange {
+  color: var(--color-text-muted);
+}
+
 /* Score bar */
 
 .scoreBar {
@@ -142,26 +195,145 @@
 
 .summaryStrip {
   display: flex;
-  gap: var(--sp-4);
+  gap: var(--sp-3);
   flex-wrap: wrap;
+  margin-bottom: var(--sp-6);
 }
 
 .summaryItem {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+  color: inherit;
+}
+
+.summaryItem:hover {
+  border-color: var(--summary-color);
+  background: var(--color-surface-hover);
+}
+
+.summaryDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--summary-color);
 }
 
 .summaryGrade {
   font-family: var(--font-mono);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   font-weight: 700;
+  color: var(--summary-color);
 }
 
 .summaryLabel {
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   color: var(--color-text-muted);
   text-transform: lowercase;
+}
+
+/* How we score */
+
+.howWeScore {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--sp-4);
+}
+
+.howWeScoreToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: var(--sp-1) 0;
+  transition: color 0.15s;
+}
+
+.howWeScoreToggle:hover {
+  color: var(--color-text-secondary);
+}
+
+.howWeScoreArrow {
+  transition: transform 0.2s var(--ease-out);
+}
+
+.howWeScoreArrowOpen {
+  transform: rotate(90deg);
+}
+
+.howWeScoreContent {
+  margin-top: var(--sp-4);
+  padding: var(--sp-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-md);
+  animation: enter 0.2s var(--ease-out);
+}
+
+.howWeScoreSection {
+  margin-bottom: var(--sp-4);
+}
+
+.howWeScoreSection:last-child {
+  margin-bottom: 0;
+}
+
+.howWeScoreSection h4 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--sp-2);
+}
+
+.howWeScoreSection p {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.howWeScoreSection ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.howWeScoreSection li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.severityBadge {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.gradeKey {
+  font-family: var(--font-mono);
+  font-weight: 700;
 }
 
 /* --- Categories --- */
@@ -360,4 +532,154 @@
   color: var(--color-text-muted);
   opacity: 0.7;
   line-height: 1.5;
+}
+
+/* --- Print styles --- */
+
+@media print {
+  .report {
+    max-width: none;
+    padding: 0;
+    font-size: 12pt;
+  }
+
+  .header {
+    margin-bottom: 24pt;
+  }
+
+  /* Hide interactive elements */
+  .back,
+  .shareBtn,
+  .downloadBtn,
+  .rescanBtn,
+  .meta,
+  .arrow,
+  .howWeScore {
+    display: none !important;
+  }
+
+  .headerRight {
+    display: none;
+  }
+
+  /* Print header with site info */
+  .header::before {
+    content: "Ship Score Report";
+    font-size: 10pt;
+    color: #666;
+    font-family: var(--font-mono);
+  }
+
+  /* Score section */
+  .scoreHero {
+    page-break-inside: avoid;
+    margin-bottom: 24pt;
+  }
+
+  .grade {
+    font-size: 48pt;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .scoreBar {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .scoreBarFill {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .summaryStrip {
+    margin-bottom: 0;
+  }
+
+  .summaryItem {
+    cursor: default;
+  }
+
+  .summaryDot {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Categories */
+  .categories {
+    border: 1px solid #ddd;
+    border-radius: 0;
+    gap: 0;
+    background: #ddd;
+  }
+
+  .category {
+    page-break-inside: avoid;
+    background: white;
+  }
+
+  .categoryHeader {
+    cursor: default;
+    padding: 12pt 16pt;
+  }
+
+  .categoryHeader:hover {
+    background: none;
+  }
+
+  .categoryIcon,
+  .categoryGrade {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Expand all checks for print */
+  .checkList {
+    display: block !important;
+  }
+
+  .check {
+    cursor: default;
+    page-break-inside: avoid;
+  }
+
+  .check:hover {
+    background: none;
+  }
+
+  .checkStatus {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .severity {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    border: 1px solid currentColor;
+  }
+
+  /* Always show descriptions in print */
+  .desc {
+    display: block !important;
+  }
+
+  /* Footer */
+  .footer {
+    margin-top: 24pt;
+    page-break-inside: avoid;
+  }
+
+  .footer p {
+    color: #666;
+    opacity: 1;
+  }
+
+  /* Add page footer */
+  .footer::after {
+    content: "Generated by Ship Score — ship-score.vercel.app";
+    display: block;
+    margin-top: 12pt;
+    font-size: 9pt;
+    color: #999;
+  }
 }

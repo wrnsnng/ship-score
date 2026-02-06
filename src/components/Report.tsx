@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState, useRef, forwardRef } from "react";
 import {
   Shield,
   Zap,
@@ -11,8 +11,12 @@ import {
   ArrowLeft,
   ChevronRight,
   Link,
+  RefreshCw,
+  HelpCircle,
+  Download,
 } from "lucide-react";
 import type { ScanResult, Category, Check as CheckType, Grade } from "../types";
+import { BadgeEmbed } from "./BadgeEmbed";
 import styles from "./Report.module.css";
 
 const CATEGORY_ICONS: Record<string, React.ElementType> = {
@@ -27,6 +31,9 @@ const CATEGORY_ICONS: Record<string, React.ElementType> = {
 interface ReportProps {
   result: ScanResult;
   onReset: () => void;
+  onRescan?: () => Promise<ScanResult | null>;
+  previousResult?: ScanResult | null;
+  isRescanning?: boolean;
 }
 
 function gradeColor(grade: Grade) {
@@ -62,9 +69,11 @@ function gradeVerdict(grade: Grade): string {
   return map[grade];
 }
 
-export function Report({ result, onReset }: ReportProps) {
+export function Report({ result, onReset, onRescan, previousResult, isRescanning }: ReportProps) {
   const domain = result.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
   const [copied, setCopied] = useState(false);
+  const [howWeScoreOpen, setHowWeScoreOpen] = useState(false);
+  const categoryRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   async function handleCopyLink() {
     try {
@@ -84,6 +93,17 @@ export function Report({ result, onReset }: ReportProps) {
     }
   }
 
+  function scrollToCategory(categoryId: string) {
+    const el = categoryRefs.current[categoryId];
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
+  // Calculate score change for re-scan comparison
+  const scoreChange = previousResult ? result.overallScore - previousResult.overallScore : null;
+  const gradeChanged = previousResult && result.overallGrade !== previousResult.overallGrade;
+
   return (
     <div className={styles.report}>
       {/* Header */}
@@ -92,9 +112,23 @@ export function Report({ result, onReset }: ReportProps) {
           <ArrowLeft size={14} strokeWidth={2} /> new scan
         </button>
         <div className={styles.headerRight}>
+          {onRescan && (
+            <button 
+              className={`${styles.rescanBtn} ${isRescanning ? styles.rescanning : ""}`}
+              onClick={onRescan}
+              disabled={isRescanning}
+            >
+              <RefreshCw size={14} strokeWidth={2} className={isRescanning ? styles.spinning : ""} />
+              {isRescanning ? "scanning..." : "re-scan"}
+            </button>
+          )}
           <button className={styles.shareBtn} onClick={handleCopyLink}>
             <Link size={14} strokeWidth={2} />
             {copied ? "copied!" : "share"}
+          </button>
+          <button className={styles.downloadBtn} onClick={() => window.print()}>
+            <Download size={14} strokeWidth={2} />
+            <span className={styles.downloadLabel}>PDF</span>
           </button>
           <span className={styles.meta}>
             {(result.scanTimeMs / 1000).toFixed(1)}s
@@ -131,6 +165,23 @@ export function Report({ result, onReset }: ReportProps) {
           </div>
         </div>
 
+        {/* Re-scan comparison */}
+        {previousResult && (
+          <div className={styles.comparison}>
+            {scoreChange !== null && scoreChange !== 0 ? (
+              <span className={scoreChange > 0 ? styles.improved : styles.declined}>
+                Score {scoreChange > 0 ? "improved" : "declined"}: {previousResult.overallScore} → {result.overallScore} ({scoreChange > 0 ? "+" : ""}{scoreChange})
+              </span>
+            ) : gradeChanged ? (
+              <span className={styles.gradeChange}>
+                Grade changed: {previousResult.overallGrade} → {result.overallGrade}
+              </span>
+            ) : (
+              <span className={styles.noChange}>No change</span>
+            )}
+          </div>
+        )}
+
         {/* Score bar */}
         <div className={styles.scoreBar}>
           <div
@@ -145,13 +196,65 @@ export function Report({ result, onReset }: ReportProps) {
         {/* Category summary strip */}
         <div className={styles.summaryStrip}>
           {result.categories.map((cat) => (
-            <div key={cat.id} className={styles.summaryItem}>
-              <span className={styles.summaryGrade} style={{ color: gradeColor(cat.grade) }}>
+            <button 
+              key={cat.id} 
+              className={styles.summaryItem}
+              onClick={() => scrollToCategory(cat.id)}
+              style={{ "--summary-color": gradeColor(cat.grade) } as React.CSSProperties}
+            >
+              <span className={styles.summaryDot} />
+              <span className={styles.summaryGrade}>
                 {cat.grade}
               </span>
               <span className={styles.summaryLabel}>{cat.name}</span>
-            </div>
+            </button>
           ))}
+        </div>
+
+        {/* How we score - collapsible */}
+        <div className={styles.howWeScore}>
+          <button 
+            className={styles.howWeScoreToggle}
+            onClick={() => setHowWeScoreOpen(!howWeScoreOpen)}
+          >
+            <HelpCircle size={14} strokeWidth={2} />
+            <span>How we score</span>
+            <ChevronRight 
+              size={14} 
+              strokeWidth={2} 
+              className={`${styles.howWeScoreArrow} ${howWeScoreOpen ? styles.howWeScoreArrowOpen : ""}`} 
+            />
+          </button>
+          {howWeScoreOpen && (
+            <div className={styles.howWeScoreContent}>
+              <div className={styles.howWeScoreSection}>
+                <h4>Severity levels</h4>
+                <ul>
+                  <li><span className={`${styles.severityBadge} ${styles.critical}`}>critical</span> Must fix — security risks or major issues</li>
+                  <li><span className={`${styles.severityBadge} ${styles.warning}`}>warning</span> Should fix — impacts user experience</li>
+                  <li><span className={`${styles.severityBadge} ${styles.info}`}>info</span> Nice to have — best practice suggestions</li>
+                </ul>
+              </div>
+              <div className={styles.howWeScoreSection}>
+                <h4>Category scores</h4>
+                <p>Each category scores 0-100 based on checks passed, weighted by severity. Critical issues have the biggest impact.</p>
+              </div>
+              <div className={styles.howWeScoreSection}>
+                <h4>Grade thresholds</h4>
+                <p>
+                  <span className={styles.gradeKey} style={{ color: gradeColor("A") }}>A</span> 90+ &nbsp;
+                  <span className={styles.gradeKey} style={{ color: gradeColor("B") }}>B</span> 80-89 &nbsp;
+                  <span className={styles.gradeKey} style={{ color: gradeColor("C") }}>C</span> 70-79 &nbsp;
+                  <span className={styles.gradeKey} style={{ color: gradeColor("D") }}>D</span> 60-69 &nbsp;
+                  <span className={styles.gradeKey} style={{ color: gradeColor("F") }}>F</span> &lt;60
+                </p>
+              </div>
+              <div className={styles.howWeScoreSection}>
+                <h4>Overall score</h4>
+                <p>Weighted average of all category scores.</p>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
@@ -162,9 +265,13 @@ export function Report({ result, onReset }: ReportProps) {
             key={category.id}
             category={category}
             index={i}
+            ref={(el) => { categoryRefs.current[category.id] = el; }}
           />
         ))}
       </section>
+
+      {/* Badge embed */}
+      <BadgeEmbed url={result.url} grade={result.overallGrade} />
 
       <footer className={styles.footer}>
         <p>
@@ -175,13 +282,10 @@ export function Report({ result, onReset }: ReportProps) {
   );
 }
 
-function CategorySection({
-  category,
-  index,
-}: {
-  category: Category;
-  index: number;
-}) {
+const CategorySection = forwardRef<
+  HTMLDivElement,
+  { category: Category; index: number }
+>(function CategorySection({ category, index }, ref) {
   const [open, setOpen] = useState(category.grade !== "A");
   const failed = category.checks.filter((c) => !c.passed);
   const passed = category.checks.filter((c) => c.passed);
@@ -189,6 +293,7 @@ function CategorySection({
 
   return (
     <div
+      ref={ref}
       className={styles.category}
       style={
         {
@@ -230,7 +335,7 @@ function CategorySection({
       )}
     </div>
   );
-}
+});
 
 function CheckItem({ check }: { check: CheckType }) {
   const [expanded, setExpanded] = useState(false);
