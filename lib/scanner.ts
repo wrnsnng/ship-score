@@ -87,16 +87,17 @@ export async function scan(url: string): Promise<ScanResult> {
     image: $('meta[property="og:image"]').attr("content"),
   };
 
-  // Fetch robots.txt and sitemap.xml in parallel
+  // Fetch robots.txt, sitemap.xml, and vibe-code checks in parallel
   const base = new URL(finalUrl);
-  const [robotsResult, sitemapResult] = await Promise.all([
+  const [robotsResult, sitemapResult, vibeCodeResult] = await Promise.all([
     fetchRobotsTxt(base.origin),
     fetchSitemap(base.origin),
+    runVibeCodeChecksAsync(base.origin),
   ]);
 
   // Run all category checks
   const categories: Category[] = [
-    runSecurityChecks(headers, finalUrl, html, $),
+    runSecurityChecks(headers, finalUrl, html, $, vibeCodeResult),
     runPerformanceChecks(headers, html, $),
     runSEOChecks($, finalUrl, robotsResult, sitemapResult),
     runAccessibilityChecks($),
@@ -283,13 +284,91 @@ function makeCategory(
   return { id, name, emoji, score, grade: scoreToGrade(score), checks };
 }
 
+// --- Vibe Code Checks (async probes) ---
+
+interface VibeCodeResult {
+  envExposed: boolean;
+  envContent?: string;
+  sourceMapExposed: boolean;
+  sourceMapUrl?: string;
+  debugMode: boolean;
+  debugEvidence?: string;
+  adminExposed: boolean;
+  adminPath?: string;
+}
+
+async function runVibeCodeChecksAsync(origin: string): Promise<VibeCodeResult> {
+  const result: VibeCodeResult = {
+    envExposed: false,
+    sourceMapExposed: false,
+    debugMode: false,
+    adminExposed: false,
+  };
+
+  const fetchQuiet = async (url: string): Promise<Response | null> => {
+    try {
+      return await fetch(url, {
+        signal: AbortSignal.timeout(5000),
+        redirect: "follow",
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; ShipScore/1.0; +https://shipscore.dev)" },
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  // Check for exposed .env file
+  const envPaths = ["/.env", "/.env.local", "/.env.production"];
+  const adminPaths = ["/admin", "/dashboard", "/_admin", "/wp-admin"];
+
+  const [envResults, adminResults] = await Promise.all([
+    Promise.all(envPaths.map(async (p) => {
+      const res = await fetchQuiet(`${origin}${p}`);
+      if (res && res.status === 200) {
+        const text = await res.text();
+        // .env files typically have KEY=VALUE patterns
+        if (/^[A-Z_]+=.+/m.test(text) && !text.includes("<!DOCTYPE") && !text.includes("<html")) {
+          return { path: p, content: text.slice(0, 200) };
+        }
+      }
+      return null;
+    })),
+    Promise.all(adminPaths.map(async (p) => {
+      const res = await fetchQuiet(`${origin}${p}`);
+      if (res && res.status === 200) {
+        const text = await res.text();
+        // Check if it's an actual admin page (not a 404 styled as 200)
+        if (text.includes("login") || text.includes("password") || text.includes("admin") || text.includes("dashboard")) {
+          return p;
+        }
+      }
+      return null;
+    })),
+  ]);
+
+  const exposedEnv = envResults.find((r) => r !== null);
+  if (exposedEnv) {
+    result.envExposed = true;
+    result.envContent = exposedEnv.path;
+  }
+
+  const exposedAdmin = adminResults.find((r) => r !== null);
+  if (exposedAdmin) {
+    result.adminExposed = true;
+    result.adminPath = exposedAdmin;
+  }
+
+  return result;
+}
+
 // --- Security ---
 
 function runSecurityChecks(
   headers: Record<string, string>,
   url: string,
   html: string,
-  $: cheerio.CheerioAPI
+  $: cheerio.CheerioAPI,
+  vibeCode?: VibeCodeResult
 ): Category {
   // Check for mixed content (HTTP resources on HTTPS page)
   const isHttps = url.startsWith("https://");
@@ -463,6 +542,187 @@ app.get('/api/data', (req, res) => {
         : undefined,
     },
   ];
+
+  // --- Vibe Code Security Checks ---
+
+  // Exposed .env file
+  checks.push({
+    id: "env-exposed",
+    name: "No exposed .env files",
+    description: "Your .env file contains database passwords, API keys, and secrets — it should never be publicly accessible.",
+    passed: !vibeCode?.envExposed,
+    severity: "critical",
+    detail: vibeCode?.envExposed
+      ? `⚠️ Found an exposed environment file at ${vibeCode.envContent}! This is a critical security vulnerability — anyone can read your database credentials, API keys, and secrets by visiting this URL.`
+      : "No .env files accessible via HTTP — your secrets aren't publicly exposed.",
+    fix: vibeCode?.envExposed
+      ? {
+          title: "Block .env file access",
+          code: `# Nginx — block dotfiles
+location ~ /\\. {
+    deny all;
+    return 404;
+}
+
+# Apache (.htaccess)
+<FilesMatch "^\\.">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Vercel/Netlify: Add to config
+# vercel.json:
+{ "rewrites": [{ "source": "/.env*", "destination": "/404" }] }`,
+          language: "nginx",
+          note: "URGENT: If your .env was exposed, assume ALL credentials are compromised. Rotate every key and password immediately.",
+        }
+      : undefined,
+  });
+
+  // Source maps in production
+  const hasSourceMaps = html.includes("sourceMappingURL") || 
+    $("script[src]").toArray().some((el) => {
+      const src = $(el).attr("src") || "";
+      return src.endsWith(".map") || src.includes(".map?");
+    });
+  
+  checks.push({
+    id: "source-maps",
+    name: "No source maps in production",
+    description: "Source maps expose your original source code — useful for debugging, dangerous in production.",
+    passed: !hasSourceMaps,
+    severity: "warning",
+    detail: hasSourceMaps
+      ? "Found sourceMappingURL references in your page. Anyone can download your original, unminified source code — including comments, variable names, and internal logic."
+      : "No source maps detected in production — your code stays minified and harder to reverse-engineer.",
+    fix: hasSourceMaps
+      ? {
+          title: "Remove source maps from production",
+          code: `// Vite
+export default {
+  build: { sourcemap: false }
+}
+
+// webpack
+module.exports = {
+  devtool: false  // or 'hidden-source-map' to keep for error tracking
+}
+
+// Next.js (next.config.js)
+module.exports = {
+  productionBrowserSourceMaps: false
+}`,
+          language: "text",
+          note: "If you need source maps for error tracking (Sentry, etc.), use 'hidden-source-map' — it uploads maps to your error service without exposing them publicly.",
+        }
+      : undefined,
+  });
+
+  // Debug mode / verbose errors
+  const debugPatterns = [
+    /stack\s*trace/i,
+    /NEXT_PUBLIC_DEBUG/i,
+    /debug\s*[:=]\s*true/i,
+    /node_modules\//,
+    /at\s+\w+\s+\(.*:\d+:\d+\)/,  // Stack trace pattern
+    /Error:.*at\s+/,
+  ];
+  const debugEvidence = debugPatterns.find((p) => p.test(html));
+
+  checks.push({
+    id: "debug-mode",
+    name: "No debug mode in production",
+    description: "Debug output and stack traces leak internal details that help attackers understand your system.",
+    passed: !debugEvidence,
+    severity: "warning",
+    detail: debugEvidence
+      ? "Found debug output or stack traces in your page HTML. This reveals internal file paths, library versions, and error details that make attacks easier."
+      : "No debug output or stack traces found in the page source.",
+    fix: debugEvidence
+      ? {
+          title: "Disable debug mode",
+          code: `# Make sure these are set in production:
+NODE_ENV=production
+DEBUG=
+
+# Next.js — remove NEXT_PUBLIC_DEBUG
+# Express — use a proper error handler:
+app.use((err, req, res, next) => {
+  console.error(err);  // Log server-side only
+  res.status(500).json({ error: 'Something went wrong' });
+  // Never send err.stack to the client!
+});`,
+          language: "text",
+          note: "Use a logging service (Sentry, LogRocket) to capture errors without exposing them to users.",
+        }
+      : undefined,
+  });
+
+  // Exposed admin panel
+  checks.push({
+    id: "admin-exposed",
+    name: "No unprotected admin panels",
+    description: "Admin panels accessible without authentication are an open door for attackers.",
+    passed: !vibeCode?.adminExposed,
+    severity: "warning",
+    detail: vibeCode?.adminExposed
+      ? `Found an accessible admin-like page at ${vibeCode.adminPath}. If this isn't behind authentication, anyone can find and access it.`
+      : "No common admin panel paths found publicly accessible.",
+    fix: vibeCode?.adminExposed
+      ? {
+          title: "Protect admin routes",
+          code: `// Add authentication middleware to all admin routes
+app.use('/admin', requireAuth, adminRouter);
+
+// Or use HTTP Basic Auth as a minimum:
+# Nginx
+location /admin {
+    auth_basic "Admin Area";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+}
+
+// Better: Use a proper auth provider (Clerk, Auth0, etc.)`,
+          language: "text",
+          note: "Consider renaming /admin to a non-obvious path, and always require authentication.",
+        }
+      : undefined,
+  });
+
+  // Default credentials / common framework defaults left in place
+  const defaultCredsPatterns = [
+    /TODO:?\s*(change|update|replace).*password/i,
+    /password.*=.*["']password["']/i,
+    /secret.*=.*["']secret["']/i,
+    /admin.*admin/i,
+  ];
+  const hasDefaultCreds = defaultCredsPatterns.some((p) => p.test(html));
+
+  checks.push({
+    id: "default-credentials",
+    name: "No default credentials",
+    description: "Default passwords and placeholder secrets left in code are the #1 way vibe-coded apps get hacked.",
+    passed: !hasDefaultCreds,
+    severity: "critical",
+    detail: hasDefaultCreds
+      ? "Found patterns suggesting default credentials or TODO comments about changing passwords in your HTML. Automated scanners actively look for these."
+      : "No default credential patterns found in the page source.",
+    fix: hasDefaultCreds
+      ? {
+          title: "Replace default credentials",
+          code: `# Generate proper secrets:
+openssl rand -base64 32  # For session secrets
+openssl rand -hex 16     # For API keys
+
+# Store in environment variables, never in code:
+SESSION_SECRET=<generated-value>
+ADMIN_PASSWORD=<strong-unique-password>
+
+# Use a password manager to generate and store credentials`,
+          language: "text",
+          note: "Search your entire codebase for 'password', 'secret', 'TODO', and 'admin'. Replace every default.",
+        }
+      : undefined,
+  });
 
   return makeCategory("security", "Security", "🔒", checks);
 }
